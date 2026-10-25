@@ -92,16 +92,7 @@ jobs:
           disk-size: 2048M
           emulator-boot-timeout: 300
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 2048 -partition-size 2048 -no-metrics
-          script: |
-            adb shell wm size 1080x1920
-            adb shell wm density 480
-            set +e
-            bash ./gradlew :app:connectedDebugAndroidTest --no-daemon --max-workers=2
-            device_result=$?
-            mkdir -p device-verification
-            adb pull /sdcard/Android/data/jp.tonekeep.app.debug/files/screenshots device-verification/ || true
-            adb logcat -d > device-verification/logcat.txt
-            exit "$device_result"
+          script: bash .ci/android_device.sh
       - name: Upload Android evidence
         if: always()
         uses: actions/upload-artifact@v4

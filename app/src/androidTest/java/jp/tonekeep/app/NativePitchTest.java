@@ -97,9 +97,16 @@ public class NativePitchTest {
     private void capture(String name) throws Exception {
         var instrumentation = InstrumentationRegistry.getInstrumentation();
         instrumentation.waitForIdleSync(); Thread.sleep(400);
-        File directory = new File(instrumentation.getTargetContext().getExternalFilesDir(null), "screenshots"); directory.mkdirs();
+        Context app = instrumentation.getTargetContext();
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Downloads.DISPLAY_NAME, name + ".png");
+        values.put(MediaStore.Downloads.MIME_TYPE, "image/png");
+        values.put(MediaStore.Downloads.RELATIVE_PATH, "Download/ToneKeep-verification");
+        values.put(MediaStore.Downloads.IS_PENDING, 1);
+        Uri destination = app.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values); assertNotNull(destination);
         Bitmap bitmap = instrumentation.getUiAutomation().takeScreenshot(); assertNotNull(bitmap);
-        try (OutputStream output = new FileOutputStream(new File(directory, name + ".png"))) { bitmap.compress(Bitmap.CompressFormat.PNG, 100, output); }
+        try (OutputStream output = app.getContentResolver().openOutputStream(destination)) { assertNotNull(output); assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)); }
+        values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0); app.getContentResolver().update(destination, values, null, null);
         bitmap.recycle();
     }
     private View findDescription(View root, String description) {
