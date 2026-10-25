@@ -2,9 +2,9 @@ package jp.tonekeep.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -17,16 +17,19 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
-import android.widget.Switch;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -34,389 +37,286 @@ import java.util.concurrent.Future;
 public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(16, 23, 22), CARD = Color.rgb(27, 37, 34), MINT = Color.rgb(183, 245, 207),
             TEXT = Color.rgb(240, 244, 237), MUTED = Color.rgb(160, 179, 168), BORDER = Color.rgb(47, 65, 56);
-    private final ArchiveClient client = new ArchiveClient();
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final String processId = "lookup-" + UUID.randomUUID();
     private DownloadStore downloads;
     private EditText input;
+    private Spinner source;
     private LinearLayout body, results;
     private TextView status;
-    private Button searchTab, libraryTab, searchButton;
+    private Button searchTab, libraryTab;
     private ProgressBar progress;
-    private ScrollView scroll;
-    private final List<ArchiveClient.Item> items = new ArrayList<>();
-    private boolean library = false, losslessOnly = false, busy = false;
-    private int generation = 0, page = 0, total = 0;
-    private String currentQuery = "";
+    private final List<MediaInfo.Track> items = new ArrayList<>();
+    private boolean library, busy, searched;
+    private int generation, selectedSource;
+    private String query = "", librarySnapshot = "";
     private Future<?> request;
     private final Runnable refresh = new Runnable() {
-        public void run() {
-            if (library) renderDownloads();
-            handler.postDelayed(this, 2000);
-        }
+        @Override public void run() { if (library) renderDownloads(false); handler.postDelayed(this, 1000); }
     };
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
         downloads = new DownloadStore(this);
         if (saved != null) {
-            library = saved.getBoolean("library");
-            losslessOnly = saved.getBoolean("lossless");
-            currentQuery = saved.getString("query", "");
+            query = saved.getString("query", ""); selectedSource = saved.getInt("source"); searched = saved.getBoolean("searched");
+            try { items.addAll(MediaInfo.parseSearch(saved.getString("results", "{\"entries\":[]}"))); } catch (Exception ignored) { }
         }
-        boolean restoreLibrary = library;
         build();
-        if (restoreLibrary) showLibrary();
-        else if (!currentQuery.isEmpty()) search(false);
+        if ((saved != null && saved.getBoolean("library")) || getIntent().getBooleanExtra("library", false)) showLibrary();
+        else acceptShare(getIntent());
+        if (downloads.active()) {
+            try { DownloadService.start(this); } catch (RuntimeException e) { toast("保存した音源の画面から再試行してください。"); }
+        }
     }
-
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent); setIntent(intent);
+        if (intent.getBooleanExtra("library", false)) showLibrary(); else acceptShare(intent);
+    }
+    private void acceptShare(Intent intent) {
+        if (!Intent.ACTION_SEND.equals(intent.getAction())) return;
+        String text = intent.getStringExtra(Intent.EXTRA_TEXT);
+        if (text == null) return;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("https?://[^\\s<>]+", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+        if (matcher.find()) { query = matcher.group(); items.clear(); searched = false; showSearch(); toast("共有されたURLを入力しました。検索して音源を確認できます。"); }
+    }
     private void build() {
-        LinearLayout root = column();
-        root.setBackgroundColor(BG);
+        LinearLayout root = column(); root.setBackgroundColor(BG);
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             if (android.os.Build.VERSION.SDK_INT >= 30) {
                 android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
                 v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            } else {
-                v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
-                        insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            }
+            } else v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
             return insets;
         });
-        LinearLayout header = row();
-        header.setPadding(dp(22), dp(16), dp(22), dp(12));
-        TextView brand = text("▥  ToneKeep", 23, TEXT, true);
-        header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView mark = text("ORIGINAL AUDIO", 10, MINT, true);
-        mark.setLetterSpacing(.1f);
-        header.addView(mark);
-        root.addView(header);
-        scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        body = column();
-        body.setPadding(dp(22), dp(14), dp(22), dp(24));
-        scroll.addView(body);
+        LinearLayout header = row(); header.setPadding(dp(22), dp(16), dp(22), dp(12));
+        header.addView(text("▥  ToneKeep", 23, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+        header.addView(text("POWERED BY yt-dlp", 10, MINT, true)); root.addView(header);
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
+        body = column(); body.setPadding(dp(22), dp(14), dp(22), dp(24)); scroll.addView(body);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        LinearLayout nav = row();
-        nav.setPadding(dp(16), dp(8), dp(16), dp(8));
+        LinearLayout nav = row(); nav.setPadding(dp(16), dp(8), dp(16), dp(8));
         searchTab = button("⌕  音楽を探す", false, v -> showSearch());
         libraryTab = button("↓  保存した音源", false, v -> showLibrary());
         nav.addView(searchTab, new LinearLayout.LayoutParams(0, dp(52), 1));
         nav.addView(libraryTab, new LinearLayout.LayoutParams(0, dp(52), 1));
-        root.addView(nav);
-        setContentView(root);
-        showSearch();
+        root.addView(nav); setContentView(root); showSearch();
     }
-
     private void showSearch() {
-        library = false;
-        tabs();
-        body.removeAllViews();
+        library = false; tabs(); body.removeAllViews();
         add(body, text("いい音を、そのまま。", 30, TEXT, true), 0, 8);
-        add(body, text("好きな一曲を探して、手元に残そう。", 14, MUTED, false), 0, 20);
-        LinearLayout feature = column();
-        feature.setBackground(round(CARD, 20, BORDER));
-        feature.setPadding(dp(18), dp(18), dp(18), dp(18));
-        add(feature, text("LOSSLESS FIRST", 11, MINT, true), 0, 8);
-        add(feature, text("配信元にある最高品質を選択", 18, TEXT, true), 0, 6);
-        add(feature, text("FLACなどを優先。変換せず元のファイルを保存します。", 12, MUTED, false), 0, 0);
-        add(body, feature, 0, 22);
-
-        input = new EditText(this);
-        input.setSingleLine(true);
-        input.setTextSize(16);
-        input.setTextColor(TEXT);
-        input.setHintTextColor(MUTED);
-        input.setHint("曲名・アーティスト名");
-        input.setText(currentQuery);
-        input.setPadding(dp(16), dp(8), dp(16), dp(8));
-        input.setBackground(round(CARD, 14, BORDER));
-        input.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        add(body, text("曲名から探す。URLから保存する。", 14, MUTED, false), 0, 20);
+        LinearLayout feature = card();
+        add(feature, text("BEST AVAILABLE AUDIO", 11, MINT, true), 0, 8);
+        add(feature, text("配信元の最高品質を、手元に。", 18, TEXT, true), 0, 6);
+        add(feature, text("Opus・M4A・FLACなど、入手できる音声を優先して保存します。", 12, MUTED, false), 0, 0);
+        add(body, feature, 0, 20);
+        source = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"曲名検索：YouTube", "曲名検索：SoundCloud"});
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); source.setAdapter(adapter); source.setSelection(selectedSource);
+        source.setContentDescription("曲名の検索先。URL入力ではこの設定は使いません"); add(body, source, 0, 12);
+        input = new EditText(this); input.setSingleLine(true); input.setTextSize(16); input.setTextColor(TEXT); input.setHintTextColor(MUTED);
+        input.setHint("曲名・アーティスト・音源ページURL"); input.setText(query); input.setPadding(dp(16), dp(8), dp(16), dp(8));
+        input.setBackground(round(CARD, 14, BORDER)); input.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
-        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(160)});
-        input.setContentDescription("曲名またはアーティスト名を入力");
-        body.addView(input, new LinearLayout.LayoutParams(-1, dp(56)));
-        searchButton = button("音源を検索  →", true, v -> search(false));
-        add(body, searchButton, 10, 10);
-        input.setOnEditorActionListener((v, action, event) -> {
-            if (action == EditorInfo.IME_ACTION_SEARCH) { search(false); return true; }
-            return false;
-        });
-        LinearLayout chips = row();
-        for (String label : new String[]{"Moonlight", "Jazz", "Piano"}) {
-            Button chip = button(label, false, v -> { input.setText(label); search(false); });
-            chips.addView(chip, new LinearLayout.LayoutParams(0, dp(48), 1));
-        }
-        add(body, chips, 0, 6);
-        Switch filter = toggle("音源選択でロスレスのみ表示", losslessOnly);
-        filter.setOnCheckedChangeListener((v, checked) -> { losslessOnly = checked; renderResults(); });
-        add(body, filter, 0, 12);
-        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progress.setIndeterminate(true);
-        progress.setVisibility(busy ? View.VISIBLE : View.GONE);
-        body.addView(progress, new LinearLayout.LayoutParams(-1, dp(3)));
-        status = text("", 13, MUTED, false);
-        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        add(body, status, 16, 8);
-        results = column();
-        body.addView(results);
-        add(body, text("Internet ArchiveのCCライセンス・パブリックドメイン音源を検索。市販曲が見つからない場合があります。", 12, MUTED, false), 18, 6);
-        Button about = button("音質とライセンスについて ↗", false, v -> about());
-        add(body, about, 0, 0);
-        renderResults();
+        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2048)});
+        input.setContentDescription("曲名、アーティスト名または音源ページのURL"); body.addView(input, new LinearLayout.LayoutParams(-1, dp(56)));
+        add(body, button("検索・URLを確認  →", true, v -> search()), 10, 8);
+        input.setOnEditorActionListener((v, action, event) -> { if (action == EditorInfo.IME_ACTION_SEARCH) { search(); return true; } return false; });
+        add(body, text("URL入力はyt-dlp対応サイトに対応。共有メニューからURLを受け取れます。", 12, MUTED, false), 0, 12);
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); progress.setIndeterminate(true);
+        progress.setVisibility(busy ? View.VISIBLE : View.GONE); body.addView(progress, new LinearLayout.LayoutParams(-1, dp(3)));
+        status = text("", 13, MUTED, false); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); add(body, status, 12, 10);
+        results = column(); body.addView(results); renderResults();
+        add(body, button("yt-dlpを更新", false, v -> updateEngine()), 16, 8);
+        add(body, button("音質・対応サイトについて ↗", false, v -> about()), 0, 0);
     }
-
-    private void search(boolean more) {
-        String query = more ? currentQuery : input.getText().toString().trim();
-        try { ArchiveClient.query(query); } catch (IllegalArgumentException e) { toast(e.getMessage()); return; }
-        if (request != null) request.cancel(true);
-        int token = ++generation;
-        int nextPage = more ? page + 1 : 1;
-        if (!more) { items.clear(); total = 0; page = 0; }
-        currentQuery = query;
+    private void search() {
+        if (busy) { toast("現在の処理が終わるまでお待ちください。"); return; }
+        String value = input.getText().toString().trim();
+        selectedSource = source.getSelectedItemPosition();
+        try { MediaInfo.target(value, selectedSource == 1); } catch (IllegalArgumentException e) { toast(e.getMessage()); return; }
+        query = value; items.clear(); searched = false; int token = ++generation; boolean sc = selectedSource == 1;
         ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(), 0);
-        setBusy(true);
-        renderResults();
-        status.setText(getString(R.string.searching, query));
+        setBusy(true); renderResults(); status.setText("検索しています。初回は実行環境の準備に時間がかかります…");
         request = worker.submit(() -> {
             try {
-                ArchiveClient.Page response = client.search(query, nextPage);
-                runOnUiThread(() -> {
-                    if (!alive(token)) return;
-                    items.addAll(response.items()); total = response.total(); page = nextPage;
-                    setBusy(false);
-                    if (!library) renderResults();
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    if (!alive(token)) return;
-                    setBusy(false);
-                    if (!library) {
-                        renderResults();
-                        status.setText(message(e));
-                        add(results, button("再試行", false, v -> search(more)), 4, 0);
-                    }
-                });
-            }
+                List<MediaInfo.Track> found = YtDlpEngine.search(this, value, sc, processId);
+                runOnUiThread(() -> { if (!alive(token)) return; items.addAll(found); searched = true; setBusy(false); if (!library) renderResults(); });
+            } catch (Exception e) { failure(token, e); }
         });
     }
-
     private void renderResults() {
         if (library || results == null) return;
         results.removeAllViews();
-        if (items.isEmpty()) {
-            status.setText(busy ? "検索中…" : page == 0 ? "DISCOVER  /  音楽を探す" : "該当する音源がありません。別の曲名や英語表記でお試しください。");
-            if (!busy && page == 0) {
-                add(results, text("気になる音楽から、はじめよう。", 18, TEXT, true), 14, 8);
-                add(results, text("曲名やアーティストを入力すると、保存できる音源を探せます。形式と容量を確認してからダウンロードできます。", 13, MUTED, false), 0, 14);
-            }
-        } else status.setText(getString(R.string.search_count, items.size(), total));
-        for (ArchiveClient.Item item : items) {
+        status.setText(busy ? "処理中…" : items.isEmpty() ? (!searched ? "DISCOVER / 音楽を探す" : "音源が見つかりません。別の表記やURLでお試しください。") : getString(R.string.track_count, items.size()));
+        if (items.isEmpty() && !searched) {
+            add(results, text("聴きたい曲から、はじめよう。", 18, TEXT, true), 8, 8);
+            add(results, text("曲名で検索するか、対応サイトのURLを貼り付けてください。音質と容量を確認してから保存できます。", 13, MUTED, false), 0, 8);
+        }
+        for (MediaInfo.Track track : items) {
             LinearLayout card = card();
-            add(card, text(AudioFile.licenseLabel(item.license()) + "  •  INTERNET ARCHIVE", 10, MINT, true), 0, 10);
-            add(card, text(item.title().isEmpty() ? item.id() : item.title(), 18, TEXT, true), 0, 6);
-            add(card, text(item.creator().isEmpty() ? "アーティスト情報なし" : item.creator(), 13, MUTED, false), 0, 12);
-            add(card, button("音源・最高品質を確認  →", true, v -> loadTracks(item)), 0, 0);
+            add(card, text(track.site() + " • " + MediaInfo.duration(track.duration()), 11, MINT, true), 0, 8);
+            add(card, text(track.title(), 18, TEXT, true), 0, 6);
+            add(card, text(track.artist().isEmpty() ? "投稿者情報なし" : track.artist(), 13, MUTED, false), 0, 12);
+            add(card, button("音質・形式を確認  →", true, v -> details(track)), 0, 0);
             add(results, card, 0, 12);
         }
-        if (!busy && page * ArchiveClient.PAGE_SIZE < total) add(results, button("次の20件を表示", false, v -> search(true)), 4, 8);
     }
-
-    private void loadTracks(ArchiveClient.Item item) {
+    private void details(MediaInfo.Track track) {
         if (busy) return;
-        int token = ++generation;
-        boolean filter = losslessOnly;
-        setBusy(true);
-        status.setText("音源の形式とライセンスを確認しています…");
+        int token = ++generation; setBusy(true); status.setText("入手できる音声形式を確認しています…");
         request = worker.submit(() -> {
             try {
-                ArchiveClient.Details details = client.details(item, filter);
-                runOnUiThread(() -> {
-                    if (!alive(token)) return;
-                    setBusy(false);
-                    if (library) return;
-                    renderResults();
-                    chooseTrack(item, details);
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> { if (alive(token)) { setBusy(false); if (!library) status.setText(message(e)); } });
-            }
+                MediaInfo.Track full = YtDlpEngine.details(this, track.url(), processId);
+                runOnUiThread(() -> { if (!alive(token)) return; setBusy(false); if (!library) { renderResults(); choose(full); } });
+            } catch (Exception e) { failure(token, e); }
         });
     }
-
-    private void chooseTrack(ArchiveClient.Item item, ArchiveClient.Details details) {
-        if (details.tracks().isEmpty()) {
-            new AlertDialog.Builder(this).setTitle("該当する音源がありません")
-                    .setMessage(losslessOnly ? "この項目にはロスレス音源がありません。フィルターを解除すると他の形式を確認できます。" : "ダウンロード可能な音源ファイルがありません。")
-                    .setPositiveButton("閉じる", null).show();
-            return;
-        }
-        String[] titles = new String[details.tracks().size()];
-        for (int i = 0; i < titles.length; i++) {
-            AudioFile best = details.tracks().get(i).get(0);
-            titles[i] = best.title + "\n" + best.quality() + " • " + AudioFile.sizeLabel(best.size);
-        }
-        new AlertDialog.Builder(this).setTitle("保存する曲を選択（" + titles.length + "曲）")
-                .setItems(titles, (dialog, which) -> chooseFormat(item, details.tracks().get(which), details.license()))
-                .setNeutralButton("配信元 ↗", (d, w) -> browse("https://archive.org/details/" + item.id()))
-                .setNegativeButton("閉じる", null).show();
-    }
-
-    private void chooseFormat(ArchiveClient.Item item, List<AudioFile> variants, String license) {
-        String[] labels = new String[variants.size()];
-        for (int i = 0; i < labels.length; i++) {
-            AudioFile file = variants.get(i);
-            labels[i] = (i == 0 ? "おすすめ • " : "") + file.quality() + "\n" + AudioFile.sizeLabel(file.size);
-        }
-        int[] choice = {0};
-        new AlertDialog.Builder(this).setTitle(variants.get(0).title)
-                .setSingleChoiceItems(labels, 0, (d, w) -> choice[0] = w)
+    private void choose(MediaInfo.Track track) {
+        String[] labels = new String[track.formats().size() + 1]; labels[0] = "最高品質を自動選択（おすすめ）\n音声専用を優先・元の形式で保存";
+        for (int i = 0; i < track.formats().size(); i++) labels[i + 1] = track.formats().get(i).label();
+        int[] selected = {0};
+        new AlertDialog.Builder(this).setTitle(track.title()).setSingleChoiceItems(labels, 0, (d, w) -> selected[0] = w)
                 .setPositiveButton("ダウンロード", (d, w) -> {
-                    try {
-                        downloads.enqueue(item, variants.get(choice[0]), license);
-                        toast("ダウンロードを開始しました。保存した音源で確認できます。");
-                    } catch (RuntimeException e) { toast(message(e)); }
-                })
-                .setNeutralButton("ライセンス ↗", (d, w) -> browse(license))
-                .setNegativeButton("キャンセル", null).show();
+                    String format = selected[0] == 0 ? "" : track.formats().get(selected[0] - 1).id();
+                    String label = selected[0] == 0 ? "最高品質・自動選択" : track.formats().get(selected[0] - 1).label();
+                    try { begin(downloads.enqueue(track, format, label)); }
+                    catch (RuntimeException e) { toast(DownloadService.error(e)); }
+                }).setNeutralButton("配信元 ↗", (d, w) -> browse(track.url())).setNegativeButton("閉じる", null).show();
     }
-
+    private void begin(DownloadStore.Entry entry) {
+        try {
+            DownloadService.start(this);
+            if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    && !downloads.prefs.getBoolean("notificationAsked", false)) {
+                downloads.prefs.edit().putBoolean("notificationAsked", true).apply();
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 10);
+            }
+            toast("保存を開始しました。保存した音源で確認できます。");
+        } catch (RuntimeException e) {
+            downloads.update(entry.id(), "failed", "ダウンロードを開始できませんでした。再試行してください。", 0, null, null);
+            toast(DownloadService.error(e));
+        }
+    }
     private void showLibrary() {
-        library = true;
-        tabs();
-        body.removeAllViews();
+        if (!library && input != null) { query = input.getText().toString(); selectedSource = source.getSelectedItemPosition(); }
+        library = true; tabs(); body.removeAllViews();
         add(body, text("あなたの音源。", 30, TEXT, true), 0, 8);
         add(body, text("保存先：ダウンロード / ToneKeep", 13, MUTED, false), 0, 18);
-        Switch wifi = toggle("今後の保存はWi-Fi接続時のみ", downloads.prefs.getBoolean("wifi", false));
-        wifi.setOnCheckedChangeListener((b, checked) -> downloads.prefs.edit().putBoolean("wifi", checked).apply());
-        add(body, wifi, 0, 16);
-        results = column();
-        body.addView(results);
-        renderDownloads();
+        CheckBox wifi = new CheckBox(this); wifi.setText(R.string.wifi_only); wifi.setTextSize(13); wifi.setTextColor(MUTED); wifi.setMinHeight(dp(48));
+        wifi.setChecked(downloads.prefs.getBoolean("wifi", false));
+        wifi.setOnCheckedChangeListener((v, checked) -> downloads.prefs.edit().putBoolean("wifi", checked).apply()); add(body, wifi, 0, 14);
+        results = column(); body.addView(results); renderDownloads(true);
     }
-
-    private void renderDownloads() {
-        if (!library || results == null) return;
-        results.removeAllViews();
+    private void renderDownloads(boolean force) {
         List<DownloadStore.Entry> entries = downloads.all();
+        String snapshot = entries.toString(); if (!force && snapshot.equals(librarySnapshot)) return; librarySnapshot = snapshot;
+        results.removeAllViews();
         if (entries.isEmpty()) {
-            LinearLayout empty = card();
-            add(empty, text("↓", 46, MINT, true), 4, 8);
-            add(empty, text("お気に入りの音を、ここに。", 18, TEXT, true), 0, 8);
-            add(empty, text("音源をダウンロードすると、進捗や保存済みファイルがここに表示されます。", 13, MUTED, false), 0, 16);
-            add(empty, button("音楽を探す  →", true, v -> showSearch()), 0, 0);
-            add(results, empty, 6, 0);
+            LinearLayout empty = card(); add(empty, text("↓", 46, MINT, true), 4, 8);
+            add(empty, text("お気に入りの音を、ここに。", 18, TEXT, true), 0, 12);
+            add(empty, button("音楽を探す  →", true, v -> showSearch()), 0, 0); add(results, empty, 4, 0);
         }
         for (DownloadStore.Entry entry : entries) {
-            DownloadStore.State state = downloads.state(entry.id());
-            LinearLayout card = card();
-            add(card, text(entry.title(), 17, TEXT, true), 0, 6);
-            add(card, text(entry.quality(), 12, MINT, false), 0, 10);
-            String stateText;
-            switch (state.status()) {
-                case DownloadManager.STATUS_SUCCESSFUL: stateText = "保存完了 • " + AudioFile.sizeLabel(state.total()); break;
-                case DownloadManager.STATUS_RUNNING: stateText = "ダウンロード中 • " + AudioFile.sizeLabel(state.received()) + " / " + AudioFile.sizeLabel(state.total()); break;
-                case DownloadManager.STATUS_PAUSED: stateText = state.reason() == DownloadManager.PAUSED_QUEUED_FOR_WIFI ? "Wi-Fi接続を待っています" : "接続待ち・再開を待っています"; break;
-                case DownloadManager.STATUS_FAILED: stateText = "保存に失敗しました（" + state.reason() + "）。再試行できます。"; break;
-                case DownloadManager.STATUS_PENDING: stateText = "ダウンロードの開始待ち"; break;
-                default: stateText = "ファイルが削除されたか、履歴が見つかりません。";
-            }
-            add(card, text(stateText, 12, MUTED, false), 0, 8);
-            if (state.status() == DownloadManager.STATUS_RUNNING) {
-                ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-                bar.setIndeterminate(state.total() <= 0);
-                if (state.total() > 0) bar.setProgress((int) (100.0 * state.received() / state.total()));
-                add(card, bar, 0, 8);
-            }
-            if (state.status() == DownloadManager.STATUS_SUCCESSFUL) {
+            LinearLayout card = card(); add(card, text(entry.title(), 17, TEXT, true), 0, 6);
+            add(card, text(entry.quality(), 12, MINT, false), 0, 8); add(card, text(entry.message(), 12, MUTED, false), 0, 8);
+            if (entry.active()) {
+                ProgressBar p = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+                p.setIndeterminate(entry.progress() == 0); p.setProgress(entry.progress()); add(card, p, 0, 8);
+                add(card, button("ダウンロードを中止", false, v -> { DownloadService.cancel(this, entry.id()); renderDownloads(true); }), 0, 0);
+            } else if (entry.status().equals("complete")) {
                 add(card, button("音源を開く  ↗", true, v -> openFile(entry)), 0, 0);
-            } else if (state.status() == DownloadManager.STATUS_FAILED || state.status() == -1) {
-                add(card, button("再ダウンロード", true, v -> {
-                    try { downloads.retry(entry); renderDownloads(); } catch (RuntimeException e) { toast(message(e)); }
-                }), 0, 0);
-            } else add(card, button("ダウンロードを中止", false, v -> {
-                new AlertDialog.Builder(this).setTitle("このダウンロードを中止しますか？")
-                        .setMessage("保存途中のファイルを削除します。")
-                        .setPositiveButton("中止する", (d, w) -> { downloads.cancel(entry); renderDownloads(); })
-                        .setNegativeButton("続ける", null).show();
-            }), 0, 0);
-            add(card, button("配信元・ライセンス ↗", false, v -> {
-                new AlertDialog.Builder(this).setTitle(AudioFile.licenseLabel(entry.license()))
-                        .setItems(new String[]{"配信元を開く", "ライセンスを開く"}, (d, w) -> browse(w == 0 ? entry.source() : entry.license()))
-                        .setNegativeButton("閉じる", null).show();
-            }), 4, 0);
-            add(results, card, 0, 12);
+                add(card, button("再ダウンロード", false, v -> retry(entry)), 6, 0);
+            } else add(card, button("再試行", true, v -> retry(entry)), 0, 0);
+            add(card, button("配信元を開く ↗", false, v -> browse(entry.url())), 6, 0); add(results, card, 0, 12);
         }
     }
-
+    private void retry(DownloadStore.Entry entry) {
+        try { begin(downloads.retry(entry)); renderDownloads(true); } catch (RuntimeException e) { toast(DownloadService.error(e)); }
+    }
     private void openFile(DownloadStore.Entry entry) {
         try {
-            Uri uri = downloads.manager.getUriForDownloadedFile(entry.id());
-            if (uri == null) { toast("ファイルが見つかりません。端末のダウンロードフォルダーを確認してください。"); return; }
-            String mime = downloads.manager.getMimeTypeForDownloadedFile(entry.id());
-            Intent intent = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime != null && mime.startsWith("audio/") ? mime : "audio/*")
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(intent, "音源を開く"));
+            Uri uri = Uri.parse(entry.contentUri());
+            try (android.os.ParcelFileDescriptor descriptor = getContentResolver().openFileDescriptor(uri, "r")) {
+                if (descriptor == null) throw new java.io.FileNotFoundException();
+            }
+            String mime = getContentResolver().getType(uri);
+            Intent open = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime != null && mime.startsWith("audio/") ? mime : "audio/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(open, "音源を開く"));
         } catch (ActivityNotFoundException e) { toast("この形式に対応する音楽プレーヤーをインストールしてください。"); }
-        catch (RuntimeException e) { toast("ファイルを開けませんでした。端末のダウンロードフォルダーを確認してください。"); }
+        catch (Exception e) { toast("ファイルが見つかりません。再ダウンロードできます。"); }
     }
-
+    private void updateEngine() {
+        if (busy || downloads.active()) { toast("検索や保存が完了してから更新してください。"); return; }
+        int token = ++generation; setBusy(true); status.setText(R.string.engine_updating);
+        request = worker.submit(() -> {
+            try {
+                String version = YtDlpEngine.update(this);
+                runOnUiThread(() -> { if (!alive(token)) return; setBusy(false); if (!library) status.setText(getString(R.string.engine_version, version == null ? "最新版" : version)); });
+            } catch (Exception e) { failure(token, e); }
+        });
+    }
     private void about() {
-        new AlertDialog.Builder(this).setTitle("元の音を、そのまま保存")
-                .setMessage("同じ録音の公開ファイルを比較し、ロスレス → ビット深度・サンプルレート（情報がある場合）→ FLACの順で優先します。非可逆圧縮では既知のビットレートを優先します。\n\n元音源の品質が上限です。ロスレス表記は元録音の品質を保証しません。数値が不明な項目は推定しません。\n\n配信元のCC・パブリックドメイン表記を確認しています。表示は投稿者の情報に基づきます。帰属表示・非営利など各音源の条件に従って利用してください。\n\nWi-Fi設定は新しく開始する保存に適用されます。保存した音源はアプリ削除後もダウンロードフォルダーに残ります。")
-                .setPositiveButton("わかりました", null).show();
+        new AlertDialog.Builder(this).setTitle("広く探して、元の品質で保存")
+                .setMessage("曲名検索：YouTube / SoundCloud\nURL入力：yt-dlpが取得できるサイト\n\n最高品質の音声を自動選択します。元の形式を優先し、映像付きファイルではFFmpegで音声を抽出します。MP3化やFLAC化による高音質化は行いません。容量やビットレートは配信元の情報から表示し、不明な値は推定しません。\n\n対応状況はサイトや地域によって変わります。取得に失敗した場合はyt-dlpの更新をお試しください。ログイン必須・DRM保護・配信中ライブには対応していません。保存・利用の権利があるコンテンツに使用してください。\n\nバックグラウンド保存は通知付きで実行します。Androidによる強制終了後は履歴から再試行できます。Wi-Fi限定は新規の保存に適用され、切断時は停止します。")
+                .setPositiveButton("閉じる", null).setNeutralButton("対応サイト ↗", (d, w) -> browse("https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md"))
+                .setNegativeButton("OSSライセンス", (d, w) -> licenses()).show();
+    }
+    private void licenses() {
+        StringBuilder content = new StringBuilder();
+        try {
+            for (String name : new String[]{"THIRD_PARTY_NOTICES.md", "LICENSE"}) {
+                try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(getAssets().open(name), java.nio.charset.StandardCharsets.UTF_8))) {
+                    String line; while ((line = reader.readLine()) != null) content.append(line).append('\n');
+                }
+                content.append("\n\n");
+            }
+            new AlertDialog.Builder(this).setTitle("オープンソースライセンス").setMessage(content).setPositiveButton("閉じる", null).show();
+        } catch (java.io.IOException e) { toast("ライセンス情報を読み込めませんでした。"); }
+    }
+    private void failure(int token, Exception e) {
+        runOnUiThread(() -> { if (!alive(token)) return; setBusy(false); if (!library) status.setText(DownloadService.error(e)); else toast(DownloadService.error(e)); });
     }
     private void browse(String url) {
-        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
-        catch (ActivityNotFoundException e) { toast("リンクを開くブラウザーがありません。"); }
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(MediaInfo.webUrl(url)))); }
+        catch (RuntimeException e) { toast("リンクを開けませんでした。"); }
     }
-    private void tabs() {
-        searchTab.setTextColor(library ? MUTED : MINT);
-        libraryTab.setTextColor(library ? MINT : MUTED);
-        searchTab.setSelected(!library); libraryTab.setSelected(library);
-    }
-    private void setBusy(boolean value) {
-        busy = value;
-        if (!library && progress != null) progress.setVisibility(value ? View.VISIBLE : View.GONE);
-    }
+    private void tabs() { searchTab.setTextColor(library ? MUTED : MINT); libraryTab.setTextColor(library ? MINT : MUTED); }
+    private void setBusy(boolean value) { busy = value; if (!library && progress != null) progress.setVisibility(value ? View.VISIBLE : View.GONE); }
     private boolean alive(int token) { return !isFinishing() && !isDestroyed() && generation == token; }
-    private String message(Exception e) {
-        if (e instanceof java.net.SocketTimeoutException) return "接続がタイムアウトしました。もう一度お試しください。";
-        if (e instanceof java.net.UnknownHostException) return "ネット接続を確認して、もう一度お試しください。";
-        return e.getMessage() == null ? "処理に失敗しました。もう一度お試しください。" : e.getMessage();
-    }
-    private void toast(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
+    private void toast(String value) { Toast.makeText(this, value, Toast.LENGTH_LONG).show(); }
     private LinearLayout column() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); return l; }
     private LinearLayout row() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.HORIZONTAL); l.setGravity(Gravity.CENTER_VERTICAL); return l; }
     private LinearLayout card() { LinearLayout c = column(); c.setPadding(dp(18), dp(18), dp(18), dp(14)); c.setBackground(round(CARD, 18, BORDER)); return c; }
     private TextView text(String value, int size, int color, boolean bold) {
-        TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color);
-        t.setLineSpacing(dp(3), 1); if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return t;
+        TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color); t.setLineSpacing(dp(3), 1);
+        if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return t;
     }
     private Button button(String label, boolean primary, View.OnClickListener listener) {
-        Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(14);
-        b.setTextColor(primary ? BG : MUTED); b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        b.setMinHeight(dp(48)); b.setMinimumHeight(dp(48)); b.setPadding(dp(12), dp(8), dp(12), dp(8));
+        Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(14); b.setTextColor(primary ? BG : MUTED);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD); b.setMinHeight(dp(48)); b.setMinimumHeight(dp(48)); b.setPadding(dp(12), dp(8), dp(12), dp(8));
         b.setBackground(round(primary ? MINT : BG, 12, primary ? MINT : BORDER)); b.setOnClickListener(listener); return b;
     }
-    private Switch toggle(String label, boolean checked) {
-        Switch s = new Switch(this); s.setText(label); s.setTextColor(MUTED); s.setTextSize(13);
-        s.setPadding(0, dp(8), 0, dp(8)); s.setMinHeight(dp(48)); s.setChecked(checked); return s;
-    }
-    private GradientDrawable round(int fill, int radius, int stroke) {
-        GradientDrawable d = new GradientDrawable(); d.setColor(fill); d.setCornerRadius(dp(radius)); d.setStroke(dp(1), stroke); return d;
-    }
-    private void add(LinearLayout parent, View child, int top, int bottom) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.setMargins(0, dp(top), 0, dp(bottom)); parent.addView(child, p);
-    }
+    private GradientDrawable round(int fill, int radius, int stroke) { GradientDrawable d = new GradientDrawable(); d.setColor(fill); d.setCornerRadius(dp(radius)); d.setStroke(dp(1), stroke); return d; }
+    private void add(LinearLayout parent, View child, int top, int bottom) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.setMargins(0, dp(top), 0, dp(bottom)); parent.addView(child, p); }
     private int dp(int n) { return Math.round(n * getResources().getDisplayMetrics().density); }
     @Override protected void onSaveInstanceState(Bundle out) {
-        super.onSaveInstanceState(out); out.putBoolean("library", library); out.putBoolean("lossless", losslessOnly);
-        out.putString("query", input != null ? input.getText().toString() : currentQuery);
+        super.onSaveInstanceState(out); out.putBoolean("library", library); out.putInt("source", source.getSelectedItemPosition());
+        out.putString("query", input != null ? input.getText().toString() : query);
+        out.putBoolean("searched", searched);
+        try {
+            org.json.JSONArray array = new org.json.JSONArray();
+            for (MediaInfo.Track t : items) array.put(new org.json.JSONObject().put("id", t.id()).put("title", t.title())
+                    .put("artist", t.artist()).put("webpage_url", t.url()).put("extractor_key", t.site()).put("duration", t.duration()).put("is_live", t.live()));
+            out.putString("results", new org.json.JSONObject().put("entries", array).toString());
+        } catch (org.json.JSONException ignored) { }
     }
     @Override protected void onResume() { super.onResume(); handler.post(refresh); }
     @Override protected void onPause() { super.onPause(); handler.removeCallbacks(refresh); }
     @Override protected void onDestroy() {
-        ++generation; if (request != null) request.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null); super.onDestroy();
+        ++generation; if (request != null) request.cancel(true); YtDlpEngine.cancel(processId);
+        worker.shutdownNow(); handler.removeCallbacksAndMessages(null); super.onDestroy();
     }
 }

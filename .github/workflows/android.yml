@@ -28,6 +28,12 @@ jobs:
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Test, lint and build APK
         run: bash ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon
+      - name: Install FFmpeg for integration check
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
+      - name: Check bundled yt-dlp and audio extraction
+        run: python3 scripts/smoke_ytdlp.py
       - name: Prepare download
         run: |
           mkdir -p dist
@@ -76,8 +82,10 @@ jobs:
           曲名検索 → 音源を選ぶ → 形式・容量を確認 → ダウンロード、の順に使えます。
           保存先は「ダウンロード / ToneKeep」です。
 
-          Internet ArchiveのCC・パブリックドメイン表記のある音源を対象としています。
-          音質は元ファイルが上限です。各音源のライセンス条件に従って利用してください。
+          曲名検索はYouTube / SoundCloud、URL入力はyt-dlpの対応サイトに対応します。
+          元の音声形式を優先します。音質は配信元の音源が上限です。
+          保存・利用する権利のあるコンテンツに使用してください。
+          yt-dlp・FFmpeg・QuickJSを同梱しているためAPKの容量が大きくなっています。
           このAPKは公開テスト鍵で署名した検証版です。
           NOTES
           gh release create "preview-${BUILD_NUMBER}-${BUILD_ATTEMPT}" dist/* \

@@ -1,5 +1,7 @@
 <resources>
     <string name="app_name">ToneKeep</string>
-    <string name="searching">「%1$s」を検索しています…</string>
-    <string name="search_count">検索結果 %1$d件 / 候補 %2$d件</string>
+    <string name="wifi_only">今後の保存はWi-Fi接続時のみ</string>
+    <string name="track_count">検索結果 %1$d件</string>
+    <string name="engine_version">yt-dlpを更新しました：%1$s</string>
+    <string name="engine_updating">公式配布元からyt-dlpを更新しています…</string>
 </resources>
