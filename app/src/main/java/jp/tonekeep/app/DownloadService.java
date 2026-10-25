@@ -26,25 +26,28 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 
 public final class DownloadService extends Service {
     private static final String CHANNEL = "tonekeep-downloads";
     private static final int NOTIFICATION = 42;
     private final ExecutorService queue = Executors.newSingleThreadExecutor();
+    private final ExecutorService pitchQueue = Executors.newSingleThreadExecutor();
+    private final CountDownLatch recovered = new CountDownLatch(1);
     private final Set<String> scheduled = ConcurrentHashMap.newKeySet();
+    private final Set<String> processing = ConcurrentHashMap.newKeySet();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private DownloadStore store;
-    private volatile String currentId;
     private int lastStartId;
     private final Runnable watch = new Runnable() {
         @Override public void run() {
-            String id = currentId;
-            DownloadStore.Entry e = id == null ? null : store.find(id);
-            if (e != null) {
+            for (String id : processing) {
+                DownloadStore.Entry e = store.find(id);
+                if (e == null) continue;
                 if (e.active() && e.wifiOnly() && !onWifi(DownloadService.this))
                     store.update(id, "failed", "Wi-Fi接続が切れたため停止しました。再接続後に再試行してください。", e.progress(), null, null);
                 e = store.find(id);
-                if (e != null && !e.active()) YtDlpEngine.cancel(id);
+                if (e != null && !e.active()) { YtDlpEngine.cancel(id); PitchEngine.cancel(id); }
             }
             handler.postDelayed(this, 500);
         }
@@ -66,8 +69,8 @@ public final class DownloadService extends Service {
             try { getContentResolver().delete(Uri.parse(e.contentUri()), null, null); } catch (RuntimeException ignored) { }
         }
         store.recoverInterrupted();
-        queue.submit(() -> clean(new File(getFilesDir(), "staging")));
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "音源のダウンロード", NotificationManager.IMPORTANCE_LOW);
+        queue.submit(() -> { try { clean(new File(getFilesDir(), "staging")); } finally { recovered.countDown(); } });
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "音源の保存・キー変更", NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
         handler.post(watch);
     }
@@ -78,33 +81,39 @@ public final class DownloadService extends Service {
             if (id != null) {
                 store.update(id, "cancelled", "中止しました", 0, null, null);
                 YtDlpEngine.cancel(id);
+                PitchEngine.cancel(id);
             }
         }
         if (!store.active() && scheduled.isEmpty()) { stopSelf(startId); return START_NOT_STICKY; }
-        startForeground(NOTIFICATION, notification("ダウンロードの準備中", 0, currentId), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        startForeground(NOTIFICATION, notification("音源処理の準備中", 0, firstProcessing()), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         for (DownloadStore.Entry entry : store.queued()) {
-            if (scheduled.add(entry.id())) queue.submit(() -> runDownload(entry));
+            if (scheduled.add(entry.id())) (entry.pitchJob() ? pitchQueue : queue).submit(() -> runDownload(entry));
         }
         return START_NOT_STICKY;
     }
     private void runDownload(DownloadStore.Entry entry) {
         File directory = new File(getFilesDir(), "staging/" + entry.id());
-        currentId = entry.id();
+        processing.add(entry.id());
         try {
-            if (!store.update(entry.id(), "running", "音源を取得しています…", 0, null, null)) return;
+            recovered.await();
+            if (!store.update(entry.id(), "running", entry.pitchJob() ? "音声ファイルを準備しています…" : "音源を取得しています…", 0, null, null)) return;
             if (entry.wifiOnly() && !onWifi(this)) throw new IOException("Wi-Fiに接続してから再試行してください。");
-            YtDlpEngine.init(this);
+            if (!entry.pitchJob()) YtDlpEngine.init(this);
             requireActive(entry.id());
             long[] lastUpdate = {0};
-            File audio = YtDlpEngine.download(this, entry, directory, (percent, line) -> {
+            YtDlpEngine.Progress callback = (percent, line) -> {
                 long now = android.os.SystemClock.elapsedRealtime();
                 if (now - lastUpdate[0] < 800) return;
                 lastUpdate[0] = now;
                 int p = Math.max(0, Math.min(99, (int) percent));
-                store.update(entry.id(), "running", p >= 99 ? "音声を抽出しています…" : "音源を取得しています…", p, null, null);
+                store.update(entry.id(), "running", entry.pitchJob() ? line : (p >= 99 ? "音声を抽出しています…" : "音源を取得しています…"), p, null, null);
                 if (android.os.Build.VERSION.SDK_INT < 33 || checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
                     getSystemService(NotificationManager.class).notify(NOTIFICATION, notification(entry.title(), p, entry.id()));
-            });
+            };
+            File audio = entry.pitchJob() ? PitchEngine.render(this, entry, directory, () -> {
+                DownloadStore.Entry current = store.find(entry.id()); return current != null && current.active();
+            }, (percent, message) -> callback.update(percent, message))
+                    : YtDlpEngine.download(this, entry, directory, callback);
             requireActive(entry.id());
             store.update(entry.id(), "publishing", "ダウンロードフォルダーに保存しています…", 99, null, null);
             publish(entry, audio);
@@ -112,7 +121,7 @@ public final class DownloadService extends Service {
             store.update(entry.id(), "failed", error(e), 0, null, null);
         } finally {
             clean(directory);
-            currentId = null;
+            processing.remove(entry.id());
             scheduled.remove(entry.id());
             handler.post(() -> {
                 if (scheduled.isEmpty() && !store.active()) {
@@ -122,6 +131,7 @@ public final class DownloadService extends Service {
             });
         }
     }
+    private String firstProcessing() { for (String id : processing) return id; return null; }
     private void requireActive(String id) throws IOException {
         DownloadStore.Entry entry = store.find(id);
         if (entry == null || !entry.active()) throw new IOException("処理を停止しました。");
@@ -189,6 +199,7 @@ public final class DownloadService extends Service {
         for (DownloadStore.Entry entry : store.activeEntries()) {
             store.update(entry.id(), "failed", "Androidのバックグラウンド処理の時間上限に達しました。再試行してください。", 0, null, null);
             YtDlpEngine.cancel(entry.id());
+            PitchEngine.cancel(entry.id());
         }
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
@@ -198,8 +209,10 @@ public final class DownloadService extends Service {
         for (String id : scheduled) {
             store.update(id, "failed", "処理が終了しました。再試行してください。", 0, null, null);
             YtDlpEngine.cancel(id);
+            PitchEngine.cancel(id);
         }
         queue.shutdownNow();
+        pitchQueue.shutdownNow();
         super.onDestroy();
     }
     @Override public IBinder onBind(Intent intent) { return null; }

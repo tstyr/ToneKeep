@@ -12,4 +12,5 @@
     <string name="load_more_history">さらに履歴を表示（残り%1$d件）</string>
     <string name="select_for_batch">一括保存の対象にする</string>
     <string name="playlist_loading">全曲を読み込んでいます。曲数が多い場合は時間がかかります…</string>
+    <string name="pitch_formants">声の自然さを優先（フォルマント保持）</string>
 </resources>

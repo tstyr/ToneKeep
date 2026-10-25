@@ -7,6 +7,7 @@ ToneKeep includes and links to the following open-source projects. Component lic
 | youtubedl-android library, common, ffmpeg | 0.18.1 | [GPL-3.0](https://github.com/yausername/youtubedl-android/blob/0.18.1/LICENSE), [corresponding wrapper source](https://github.com/yausername/youtubedl-android/tree/0.18.1) |
 | Bundled yt-dlp Python zipapp, including EJS | 2026.10.21 | [upstream licensing information](https://github.com/yt-dlp/yt-dlp/tree/2026.10.21#license), [tagged source](https://github.com/yt-dlp/yt-dlp/tree/2026.10.21) |
 | Python, FFmpeg, QuickJS and their bundled libraries | supplied by youtubedl-android 0.18.1 | [runtime distribution and build information](https://github.com/yausername/youtubedl-android/tree/0.18.1), [Python build](https://github.com/yausername/youtubedl-android/blob/0.18.1/BUILD_PYTHON.md), [FFmpeg build](https://github.com/yausername/youtubedl-android/blob/0.18.1/BUILD_FFMPEG.md) |
+| Rubber Band Library (used through FFmpeg) | supplied by the FFmpeg runtime above | [GPL licensing and upstream source](https://github.com/breakfastquay/rubberband), [project](https://breakfastquay.com/rubberband/) |
 | Kotlin stdlib | 1.7.22 | Apache-2.0, https://github.com/JetBrains/kotlin |
 | AndroidX | versions resolved in Gradle | Apache-2.0, https://android.googlesource.com/platform/frameworks/support/ |
 | Jackson | 2.11.1 | Apache-2.0, https://github.com/FasterXML/jackson |

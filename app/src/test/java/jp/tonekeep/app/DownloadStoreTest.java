@@ -97,4 +97,42 @@ public class DownloadStoreTest {
         assertEquals(1000, new DownloadStore(context).pending());
         assertEquals(80, store.recent(80).size()); assertEquals("Track 0", store.queued().get(0).title());
     }
+    @Test public void pitchRetryPreservesSourceAndSettingsAndWorksWithoutWifi() {
+        DownloadStore store = new DownloadStore(context);
+        store.prefs.edit().putBoolean("wifi", true).commit();
+        DownloadStore.Entry original = store.enqueuePitch("content://audio/original", "Song.wav", new PitchSettings(-5, false, "wav"));
+        assertThrows(IllegalStateException.class, () -> store.enqueuePitch(original.url(), "Song.wav", new PitchSettings(-5, false, "wav")));
+        assertTrue(store.batches().isEmpty());
+        store.update(original.id(), "cancelled", "cancel", 0, null, null);
+        assertFalse(store.update(original.id(), "complete", "late", 100, "content://late", "late.wav"));
+        DownloadStore.Entry retry = new DownloadStore(context).retry(store.find(original.id()));
+        assertTrue(retry.pitchJob()); assertFalse(retry.wifiOnly());
+        assertEquals(-5, retry.semitones()); assertFalse(retry.preserveFormants()); assertEquals("wav", retry.outputFormat());
+        assertEquals(original.url(), retry.url()); assertEquals(original.title(), retry.title()); assertNotEquals(original.id(), retry.id());
+        assertThrows(IllegalArgumentException.class, () -> store.enqueuePitch("https://example.com/file.wav", "Remote", new PitchSettings(1, true, "flac")));
+    }
+    @Test public void runningPitchRemainsVisibleAheadOfNewerHistory() {
+        DownloadStore store = new DownloadStore(context);
+        DownloadStore.Entry running = store.enqueuePitch("content://audio/first", "First", new PitchSettings(3, true, "flac"));
+        store.update(running.id(), "running", "processing", 20, null, null);
+        for (int i = 0; i < 15; i++) {
+            DownloadStore.Entry e = store.enqueuePitch("content://audio/" + i, "Song", new PitchSettings(3, true, "flac"));
+            store.update(e.id(), "complete", "done", 100, "content://output/" + i, "song.flac");
+        }
+        assertEquals(12, store.pitchRecent().size()); assertEquals(running.id(), store.pitchRecent().get(0).id());
+    }
+    @Test public void databaseUpgradePreservesExistingDownloadsAndAddsPitchSettings() {
+        try (android.database.sqlite.SQLiteDatabase old = context.openOrCreateDatabase("downloads.db", Context.MODE_PRIVATE, null)) {
+            old.execSQL("CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,title TEXT NOT NULL,url TEXT NOT NULL,format_id TEXT NOT NULL,quality TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,progress INTEGER NOT NULL,content_uri TEXT NOT NULL,filename TEXT NOT NULL,wifi INTEGER NOT NULL,batch_id TEXT NOT NULL,batch_title TEXT NOT NULL)");
+            old.execSQL("INSERT INTO jobs (id,title,url,format_id,quality,status,message,progress,content_uri,filename,wifi,batch_id,batch_title) VALUES ('old','Existing','https://example.com/old','251','best','complete','done',100,'content://existing','old.opus',1,'batch','Old batch')");
+            old.setVersion(1);
+        }
+        DownloadStore store = new DownloadStore(context);
+        DownloadStore.Entry old = store.find("old");
+        assertEquals("complete", old.status()); assertEquals("content://existing", old.contentUri());
+        assertEquals("251", old.formatId()); assertTrue(old.wifiOnly()); assertFalse(old.pitchJob());
+        assertEquals(0, old.semitones());
+        store.enqueuePitch(old.contentUri(), old.title(), new PitchSettings(2, true, "flac"));
+        assertEquals(2, store.count());
+    }
 }
