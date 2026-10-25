@@ -90,12 +90,22 @@ public class NativePitchTest {
                 DownloadStore.Entry result = store.find(entry.id());
                 assertEquals("Native " + extension + ": " + result.message(), "complete", result.status());
                 Uri destination = Uri.parse(result.contentUri()); created.add(destination);
+                File encoded = new File(app.getCacheDir(), "verify." + extension);
+                try (InputStream input = app.getContentResolver().openInputStream(destination); OutputStream output = new FileOutputStream(encoded)) {
+                    byte[] buffer = new byte[16384]; int count;
+                    while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                }
+                String encodedInfo = PitchEngine.execute(app, "libffprobe.so", List.of("-v", "error", "-show_entries", "stream=codec_name", "-of", "json", encoded.getAbsolutePath()),
+                        "verify-codec", new File(app.getCacheDir(), "verify-codec.log"), () -> true, null);
+                String codec = switch (extension) { case "wav" -> "pcm_s24le"; case "m4a" -> "aac"; case "ogg" -> "vorbis"; default -> extension; };
+                assertEquals(codec, new org.json.JSONObject(encodedInfo).getJSONArray("streams").getJSONObject(0).getString("codec_name")); encoded.delete();
                 try (var descriptor = app.getContentResolver().openFileDescriptor(destination, "r")) {
                     MediaExtractor extractor = new MediaExtractor();
                     try {
                         extractor.setDataSource(descriptor.getFileDescriptor());
                         MediaFormat format = extractor.getTrackFormat(0);
-                        String mime = switch (extension) { case "flac" -> "audio/flac"; case "wav" -> "audio/raw"; case "mp3" -> "audio/mpeg"; case "m4a" -> "audio/mp4a-latm"; case "opus" -> "audio/opus"; default -> "audio/vorbis"; };
+                        // Android's FLAC extractor exposes decoded PCM (audio/raw).
+                        String mime = switch (extension) { case "flac", "wav" -> "audio/raw"; case "mp3" -> "audio/mpeg"; case "m4a" -> "audio/mp4a-latm"; case "opus" -> "audio/opus"; default -> "audio/vorbis"; };
                         assertEquals(mime, format.getString(MediaFormat.KEY_MIME));
                         assertEquals(48000, format.getInteger(MediaFormat.KEY_SAMPLE_RATE));
                         assertEquals(2, format.getInteger(MediaFormat.KEY_CHANNEL_COUNT));
