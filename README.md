@@ -48,6 +48,8 @@ FLAC／WAVへの保存で追加の非可逆圧縮を避けますが、キー変�
 
 ## GitHubからAPKをダウンロード
 
+リポジトリは [tstyr/ToneKeep](https://github.com/tstyr/ToneKeep)（非公開）です。アクセスできるGitHubアカウントでログインしてから開いてください。
+
 1. リポジトリの **Releases → ToneKeep Preview** を開きます。
 2. **Assets → ToneKeep-preview.apk** をAndroid端末にダウンロードします。
 3. APKを開いてAndroidの案内に従いインストールします。必要に応じて使用したブラウザーの「不明なアプリのインストール」を許可します。
