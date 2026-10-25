@@ -4,4 +4,12 @@
     <string name="track_count">検索結果 %1$d件</string>
     <string name="engine_version">yt-dlpを更新しました：%1$s</string>
     <string name="engine_updating">公式配布元からyt-dlpを更新しています…</string>
+    <string name="queue_notification">%1$s / 待機 %2$d曲</string>
+    <string name="selected_tracks">%1$d曲を選択中 / %2$d曲</string>
+    <string name="playlist_loaded">全%1$d曲を読み込みました。取得不可 %2$d件・重複 %3$d件を除外</string>
+    <string name="bulk_result">%1$d曲を追加、重複・保存済みなど%2$d曲を除外しました。</string>
+    <string name="load_more_tracks">次の曲を表示（残り%1$d曲）</string>
+    <string name="load_more_history">さらに履歴を表示（残り%1$d件）</string>
+    <string name="select_for_batch">一括保存の対象にする</string>
+    <string name="playlist_loading">全曲を読み込んでいます。曲数が多い場合は時間がかかります…</string>
 </resources>

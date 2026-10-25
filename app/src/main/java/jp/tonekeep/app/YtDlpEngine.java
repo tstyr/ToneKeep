@@ -36,9 +36,22 @@ final class YtDlpEngine {
     }
     static List<MediaInfo.Track> search(Context context, String text, boolean soundcloud, String process) throws Exception {
         init(context);
-        YoutubeDLRequest request = base(MediaInfo.target(text, soundcloud)).addOption("--flat-playlist")
+        String target = MediaInfo.target(text, soundcloud);
+        if (target.startsWith("http")) MediaInfo.downloadPage(target);
+        YoutubeDLRequest request = base(target).addOption("--flat-playlist")
                 .addOption("--playlist-end", 12).addOption("--dump-single-json").addOption("--skip-download");
         return MediaInfo.parseSearch(YoutubeDL.getInstance().execute(request, process).getOut());
+    }
+    static YoutubeDLRequest playlistRequest(String url) {
+        return new YoutubeDLRequest(MediaInfo.downloadPage(url)).addOption("--ignore-config")
+                .addOption("--yes-playlist").addOption("--flat-playlist")
+                .addOption("--dump-single-json").addOption("--skip-download")
+                .addOption("--ignore-errors").addOption("--socket-timeout", 20)
+                .addOption("--retries", 3).addOption("--no-warnings");
+    }
+    static MediaInfo.Collection playlist(Context context, String url, String process) throws Exception {
+        init(context);
+        return MediaInfo.parseCollection(YoutubeDL.getInstance().execute(playlistRequest(url), process).getOut());
     }
     static MediaInfo.Track details(Context context, String url, String process) throws Exception {
         init(context);

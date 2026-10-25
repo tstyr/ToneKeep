@@ -62,7 +62,7 @@ public final class DownloadService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         store = new DownloadStore(this);
-        for (DownloadStore.Entry e : store.all()) if (e.status().equals("publishing") && !e.contentUri().isEmpty()) {
+        for (DownloadStore.Entry e : store.activeEntries()) if (e.status().equals("publishing") && !e.contentUri().isEmpty()) {
             try { getContentResolver().delete(Uri.parse(e.contentUri()), null, null); } catch (RuntimeException ignored) { }
         }
         store.recoverInterrupted();
@@ -82,8 +82,8 @@ public final class DownloadService extends Service {
         }
         if (!store.active() && scheduled.isEmpty()) { stopSelf(startId); return START_NOT_STICKY; }
         startForeground(NOTIFICATION, notification("ダウンロードの準備中", 0, currentId), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-        for (DownloadStore.Entry entry : store.all()) {
-            if (entry.status().equals("queued") && scheduled.add(entry.id())) queue.submit(() -> runDownload(entry));
+        for (DownloadStore.Entry entry : store.queued()) {
+            if (scheduled.add(entry.id())) queue.submit(() -> runDownload(entry));
         }
         return START_NOT_STICKY;
     }
@@ -156,7 +156,7 @@ public final class DownloadService extends Service {
         Intent open = new Intent(this, MainActivity.class).putExtra("library", true);
         PendingIntent content = PendingIntent.getActivity(this, 1, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder builder = new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_launcher)
-                .setContentTitle("ToneKeep").setContentText(title).setContentIntent(content)
+                .setContentTitle("ToneKeep").setContentText(getString(R.string.queue_notification, title, store.pending())).setContentIntent(content)
                 .setOnlyAlertOnce(true).setOngoing(true).setProgress(100, percent, percent <= 0);
         if (id != null) {
             PendingIntent stop = PendingIntent.getService(this, id.hashCode(),
@@ -186,7 +186,7 @@ public final class DownloadService extends Service {
         if (file.exists() && !file.delete()) file.deleteOnExit();
     }
     @Override public void onTimeout(int startId, int fgsType) {
-        for (DownloadStore.Entry entry : store.all()) if (entry.active()) {
+        for (DownloadStore.Entry entry : store.activeEntries()) {
             store.update(entry.id(), "failed", "Androidのバックグラウンド処理の時間上限に達しました。再試行してください。", 0, null, null);
             YtDlpEngine.cancel(entry.id());
         }

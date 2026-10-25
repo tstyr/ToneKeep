@@ -80,6 +80,31 @@ public class MediaInfoTest {
         JSONObject object = new JSONObject().put("url", "https://example.com/live").put("is_live", true);
         assertTrue(MediaInfo.parseTrack(object).live());
     }
+    @Test public void playlistRequestLoadsEntireCollectionInsteadOfTwelveSearchResults() {
+        YoutubeDLRequest request = YtDlpEngine.playlistRequest("https://www.youtube.com/playlist?list=example");
+        assertTrue(request.hasOption("--yes-playlist")); assertTrue(request.hasOption("--flat-playlist"));
+        assertFalse(request.hasOption("--no-playlist")); assertFalse(request.hasOption("--playlist-end"));
+        assertTrue(request.hasOption("--skip-download"));
+    }
+    @Test public void fullPlaylistPreservesOrderAndReportsUnavailableDuplicatesAndNestedEntries() throws Exception {
+        JSONArray entries = new JSONArray();
+        for (int i = 0; i < 25; i++) entries.put(new JSONObject().put("title", "Track " + i).put("url", "https://example.com/" + i));
+        entries.put(new JSONObject().put("url", "https://example.com/0"));
+        entries.put(JSONObject.NULL);
+        entries.put(new JSONObject().put("url", "https://example.com/private").put("availability", "private"));
+        entries.put(new JSONObject().put("url", "https://example.com/live").put("is_live", true));
+        entries.put(new JSONObject().put("entries", new JSONArray().put(new JSONObject().put("url", "https://example.com/nested"))));
+        MediaInfo.Collection collection = MediaInfo.parseCollection(new JSONObject().put("title", "Playlist").put("entries", entries).toString());
+        assertEquals("Playlist", collection.title()); assertEquals(26, collection.tracks().size());
+        assertEquals(1, collection.duplicates()); assertEquals(3, collection.unavailable());
+        assertEquals("Track 24", collection.tracks().get(24).title());
+        assertEquals("https://example.com/nested", collection.tracks().get(25).url());
+    }
+    @Test public void spotifyHasSpecificMessageWithoutRejectingUnrelatedHostNames() {
+        try { MediaInfo.downloadPage("https://open.spotify.com/playlist/test"); fail(); }
+        catch (IllegalArgumentException e) { assertTrue(e.getMessage().contains("Spotify")); }
+        assertEquals("https://example.com/spotify-playlist", MediaInfo.downloadPage("https://example.com/spotify-playlist"));
+    }
     private JSONObject format(String id, String vcodec, String acodec) throws Exception {
         return new JSONObject().put("format_id", id).put("ext", "webm").put("vcodec", vcodec).put("acodec", acodec);
     }

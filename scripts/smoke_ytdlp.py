@@ -39,11 +39,19 @@ with tempfile.TemporaryDirectory(prefix="tonekeep-test-") as temp:
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_port}/fixture.wav"
+    playlist = workspace / "playlist.rss"
+    playlist.write_text('<rss version="2.0"><channel><title>Owned fixture playlist</title><link>' + url + '</link><description>Integration test</description>'
+                        + ''.join(f'<item><title>Track {i}</title><guid>{i}</guid><enclosure url="{url}?track={i}" type="audio/wav" length="88244" /></item>' for i in range(15))
+                        + '</channel></rss>', encoding="utf-8")
     base = [sys.executable, str(ENGINE), "--ignore-config", "--no-playlist", "--socket-timeout", "20", "--no-warnings"]
     try:
         raw = subprocess.run(base + ["--dump-single-json", "--skip-download", url], capture_output=True, text=True, check=True, timeout=60)
         info = json.loads(raw.stdout)
         assert info["title"] and info["formats"], info
+        playlist_url = f"http://127.0.0.1:{server.server_port}/playlist.rss"
+        collection_raw = subprocess.run([sys.executable, str(ENGINE), "--ignore-config", "--yes-playlist", "--flat-playlist", "--dump-single-json", "--skip-download", "--ignore-errors", playlist_url], capture_output=True, text=True, check=True, timeout=60)
+        collection = json.loads(collection_raw.stdout)
+        assert len(collection["entries"]) == 15, collection
         target = workspace / "out" / "audio.%(ext)s"
         subprocess.run(base + ["-f", "bestaudio/best", "--extract-audio", "--audio-format", "best", "--no-mtime", "--no-overwrites", "--match-filters", "!is_live", "-o", str(target), url], capture_output=True, text=True, check=True, timeout=60)
         outputs = list(target.parent.glob("audio.*"))
@@ -52,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix="tonekeep-test-") as temp:
         stream = json.loads(probe.stdout)["streams"][0]
         assert stream["codec_type"] == "audio" and stream["codec_name"] == "pcm_s16le", stream
         assert int(stream["sample_rate"]) == 44100, stream
-        print(json.dumps({"bundled_version": "2026.10.21", "extractor": info["extractor"], "output": outputs[0].name, "codec": stream["codec_name"], "sample_rate": stream["sample_rate"], "result": "PASS"}))
+        print(json.dumps({"bundled_version": "2026.10.21", "playlist_entries": len(collection["entries"]), "extractor": info["extractor"], "output": outputs[0].name, "codec": stream["codec_name"], "sample_rate": stream["sample_rate"], "result": "PASS"}))
     finally:
         server.shutdown()
         server.server_close()

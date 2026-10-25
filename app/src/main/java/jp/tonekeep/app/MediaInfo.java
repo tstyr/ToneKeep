@@ -6,12 +6,14 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 
 /** Pure metadata and input parsing, independent of Android and the native runtime. */
 public final class MediaInfo {
     public record Track(String id, String title, String artist, String url, String site, long duration,
                         boolean live, List<Format> formats) { }
+    public record Collection(String title, List<Track> tracks, int unavailable, int duplicates) { }
     public record Format(String id, String extension, String codec, double bitrate, long size, int sampleRate) {
         public String label() {
             String text = extension.toUpperCase(Locale.ROOT) + " / " + codec;
@@ -33,6 +35,40 @@ public final class MediaInfo {
         if (trimmed.isEmpty()) throw new IllegalArgumentException("曲名・アーティスト名またはURLを入力してください。");
         if (trimmed.matches("(?i)^[a-z][a-z0-9+.-]*:.*")) return webUrl(trimmed);
         return (soundcloud ? "scsearch12:" : "ytsearch12:") + trimmed;
+    }
+    public static String downloadPage(String text) {
+        String url = webUrl(text);
+        String host = URI.create(url).getHost().toLowerCase(Locale.ROOT);
+        if (host.equals("spotify.com") || host.endsWith(".spotify.com") || host.equals("spotify.link"))
+            throw new IllegalArgumentException("Spotify音源の直接保存には非対応です。Spotifyの曲一覧を別配信元で探す場合も、取得する音源はSpotify版とは異なります。");
+        return url;
+    }
+    public static Collection parseCollection(String json) throws Exception {
+        JSONObject root = new JSONObject(json);
+        LinkedHashMap<String, Track> tracks = new LinkedHashMap<>();
+        int[] skipped = {0, 0};
+        collect(root, tracks, skipped, 0);
+        return new Collection(root.optString("title", "プレイリスト"), new ArrayList<>(tracks.values()), skipped[0], skipped[1]);
+    }
+    private static void collect(JSONObject item, LinkedHashMap<String, Track> tracks, int[] skipped, int depth) {
+        if (depth > 32) { skipped[0]++; return; }
+        JSONArray entries = item.optJSONArray("entries");
+        if (entries != null) {
+            for (int i = 0; i < entries.length(); i++) {
+                JSONObject child = entries.optJSONObject(i);
+                if (child == null) skipped[0]++; else collect(child, tracks, skipped, depth + 1);
+            }
+            return;
+        }
+        String availability = item.optString("availability");
+        if (availability.matches("private|premium_only|subscriber_only|needs_auth")
+                || item.optString("title").matches("\\[(Private|Deleted) video\\]")) { skipped[0]++; return; }
+        try {
+            Track track = parseTrack(item);
+            if (track.live()) { skipped[0]++; return; }
+            downloadPage(track.url());
+            if (tracks.putIfAbsent(track.url(), track) != null) skipped[1]++;
+        } catch (IllegalArgumentException e) { skipped[0]++; }
     }
     public static List<Track> parseSearch(String json) throws Exception {
         JSONObject root = new JSONObject(json);
