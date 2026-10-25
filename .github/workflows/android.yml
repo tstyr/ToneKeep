@@ -68,6 +68,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
+      - name: Reserve space for Android device
+        run: |
+          sudo rm -rf -- /usr/share/dotnet /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
