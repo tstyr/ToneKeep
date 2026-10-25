@@ -8,6 +8,9 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
+import android.content.res.ColorStateList;
+import android.text.TextUtils;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -27,6 +30,9 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.ImageView;
+import android.widget.ImageButton;
+import android.widget.PopupMenu;
 import android.widget.Toast;
 import java.util.ArrayList;
 import java.util.List;
@@ -49,7 +55,7 @@ public final class MainActivity extends Activity {
     private LinearLayout body, results;
     private TextView status;
     private TextView selectionStatus;
-    private Button searchTab, libraryTab, pitchTab;
+    private LinearLayout searchTab, libraryTab, pitchTab;
     private boolean pitchMode;
     private String pitchSourceUri = "", pitchSourceName = "", pitchSnapshot = "";
     private int pitchSemitones;
@@ -107,50 +113,42 @@ public final class MainActivity extends Activity {
             } else v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
             return insets;
         });
-        LinearLayout header = row(); header.setPadding(dp(22), dp(16), dp(22), dp(12));
-        header.addView(text("▥  ToneKeep", 23, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
-        header.addView(text("POWERED BY yt-dlp", 10, MINT, true)); root.addView(header);
+        LinearLayout header = row(); header.setPadding(dp(20), dp(4), dp(8), dp(4));
+        header.addView(text("ToneKeep", 22, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+        header.addView(iconButton(UiIcon.Kind.MORE, "アプリの設定", this::appMenu)); root.addView(header);
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
-        body = column(); body.setPadding(dp(22), dp(14), dp(22), dp(24)); scroll.addView(body);
+        body = column(); body.setPadding(dp(20), dp(14), dp(20), dp(20)); scroll.addView(body);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        LinearLayout nav = row(); nav.setPadding(dp(16), dp(8), dp(16), dp(8));
-        searchTab = button("⌕  探す", false, v -> showSearch());
-        libraryTab = button("↓  音源", false, v -> showLibrary());
-        pitchTab = button("♭  キー変更", false, v -> showPitch());
-        nav.addView(searchTab, new LinearLayout.LayoutParams(0, dp(52), 1));
-        nav.addView(libraryTab, new LinearLayout.LayoutParams(0, dp(52), 1));
-        nav.addView(pitchTab, new LinearLayout.LayoutParams(0, dp(52), 1));
+        LinearLayout nav = row(); nav.setPadding(dp(12), dp(6), dp(12), dp(6));
+        searchTab = navItem(UiIcon.Kind.SEARCH, "検索", "検索画面", v -> showSearch());
+        libraryTab = navItem(UiIcon.Kind.LIBRARY, "音源", "ライブラリ", v -> showLibrary());
+        pitchTab = navItem(UiIcon.Kind.KEY, "キー", "キー変更", v -> showPitch());
+        nav.addView(searchTab, new LinearLayout.LayoutParams(0, -2, 1));
+        nav.addView(libraryTab, new LinearLayout.LayoutParams(0, -2, 1));
+        nav.addView(pitchTab, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(nav); setContentView(root); showSearch();
     }
     private void showSearch() {
         library = false; pitchMode = false; tabs(); body.removeAllViews();
-        add(body, text("いい音を、そのまま。", 30, TEXT, true), 0, 8);
-        add(body, text("曲名から探す。URLから保存する。", 14, MUTED, false), 0, 20);
-        LinearLayout feature = card();
-        add(feature, text("BEST AVAILABLE AUDIO", 11, MINT, true), 0, 8);
-        add(feature, text("配信元の最高品質を、手元に。", 18, TEXT, true), 0, 6);
-        add(feature, text("Opus・M4A・FLACなど、入手できる音声を優先して保存します。", 12, MUTED, false), 0, 0);
-        add(body, feature, 0, 20);
+        add(body, text("検索", 25, TEXT, true), 0, 12);
         source = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"曲名検索：YouTube", "曲名検索：SoundCloud"});
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"YouTube", "SoundCloud"});
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); source.setAdapter(adapter); source.setSelection(selectedSource);
         source.setContentDescription("曲名の検索先。URL入力ではこの設定は使いません"); add(body, source, 0, 12);
         input = new EditText(this); input.setSingleLine(true); input.setTextSize(16); input.setTextColor(TEXT); input.setHintTextColor(MUTED);
-        input.setHint("曲名・アーティスト・音源ページURL"); input.setText(query); input.setPadding(dp(16), dp(8), dp(16), dp(8));
+        input.setHint("曲名・URL"); input.setText(query); input.setPadding(dp(14), dp(8), dp(10), dp(8));
         input.setBackground(round(CARD, 14, BORDER)); input.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2048)});
-        input.setContentDescription("曲名、アーティスト名または音源ページのURL"); body.addView(input, new LinearLayout.LayoutParams(-1, dp(56)));
-        add(body, button("検索・URLを確認  →", true, v -> search()), 10, 8);
-        add(body, button("プレイリスト全曲を読み込む", false, v -> loadPlaylist()), 0, 8);
+        input.setContentDescription("曲名、アーティスト名または音源ページのURL");
+        LinearLayout searchRow = row(); searchRow.addView(input, new LinearLayout.LayoutParams(0, dp(52), 1));
+        searchRow.addView(iconButton(UiIcon.Kind.SEARCH, "検索する", v -> search())); add(body, searchRow, 0, 8);
+        add(body, compactButton("プレイリスト", UiIcon.Kind.LIST, v -> loadPlaylist()), 0, 8);
         input.setOnEditorActionListener((v, action, event) -> { if (action == EditorInfo.IME_ACTION_SEARCH) { search(); return true; } return false; });
-        add(body, text("プレイリストURLは「全曲を読み込む」を選択。取得後にまとめて保存できます。Spotify音源の直接保存には非対応です。", 12, MUTED, false), 0, 12);
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); progress.setIndeterminate(true);
         progress.setVisibility(busy ? View.VISIBLE : View.GONE); body.addView(progress, new LinearLayout.LayoutParams(-1, dp(3)));
         status = text("", 13, MUTED, false); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); add(body, status, 12, 10);
         results = column(); body.addView(results); renderResults();
-        add(body, button("yt-dlpを更新", false, v -> updateEngine()), 16, 8);
-        add(body, button("音質・対応サイトについて ↗", false, v -> about()), 0, 0);
     }
     private void search() {
         if (busy) { toast("現在の処理が終わるまでお待ちください。"); return; }
@@ -190,39 +188,44 @@ public final class MainActivity extends Activity {
     private void renderResults() {
         if (library || pitchMode || results == null) return;
         results.removeAllViews();
-        status.setText(busy ? "処理中…" : items.isEmpty() ? (!searched ? "DISCOVER / 音楽を探す" : "音源が見つかりません。別の表記やURLでお試しください。") : getString(R.string.track_count, items.size()));
+        status.setText(busy ? "読み込み中…" : items.isEmpty() ? (searched ? "見つかりませんでした" : "") : items.size() + "曲");
         if (items.isEmpty() && !searched) {
-            add(results, text("聴きたい曲から、はじめよう。", 18, TEXT, true), 8, 8);
-            add(results, text("曲名で検索するか、対応サイトのURLを貼り付けてください。音質と容量を確認してから保存できます。", 13, MUTED, false), 0, 8);
+            ImageView empty = new ImageView(this); empty.setImageDrawable(new UiIcon(UiIcon.Kind.SEARCH, BORDER));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(56), dp(56)); p.gravity = Gravity.CENTER; p.topMargin = dp(48); p.bottomMargin = dp(16); results.addView(empty, p);
+            TextView hint = text("曲名・URLで検索", 14, MUTED, false); hint.setGravity(Gravity.CENTER); add(results, hint, 0, 8);
         }
         if (busy) add(results, button("読み込みを中止", false, v -> {
             ++generation; if (request != null) request.cancel(true); YtDlpEngine.cancel(processId); setBusy(false); renderResults();
         }), 0, 12);
         if (!items.isEmpty()) {
-            selectionStatus = text(getString(R.string.selected_tracks, selected.size(), items.size()), 13, MINT, true);
-            add(results, selectionStatus, 0, 10);
+            selectionStatus = text(selected.size() + " / " + items.size(), 13, MINT, true);
             LinearLayout choices = row();
+            choices.addView(selectionStatus, new LinearLayout.LayoutParams(0, -2, 1));
             choices.addView(button("全選択", false, v -> { for (MediaInfo.Track track : items) if (!track.live()) selected.add(track.url()); renderResults(); }), new LinearLayout.LayoutParams(0, -2, 1));
-            choices.addView(button("選択を解除", false, v -> { selected.clear(); renderResults(); }), new LinearLayout.LayoutParams(0, -2, 1));
+            choices.addView(iconButton(UiIcon.Kind.CLOSE, "選択を解除", v -> { selected.clear(); renderResults(); }));
             add(results, choices, 0, 8);
-            add(results, button("選択した曲を一括保存  ↓", true, v -> {
+            if (!selected.isEmpty()) add(results, button("保存（" + selected.size() + "）", true, v -> {
                 List<MediaInfo.Track> chosen = new ArrayList<>(); for (MediaInfo.Track track : items) if (selected.contains(track.url())) chosen.add(track);
                 enqueueBatch(chosen, collectionTitle);
             }), 0, 14);
         }
         for (MediaInfo.Track track : items.subList(0, Math.min(items.size(), visibleCount))) {
             LinearLayout card = card();
-            CheckBox check = new CheckBox(this); check.setText(R.string.select_for_batch); check.setTextColor(MUTED);
+            LinearLayout trackRow = row();
+            CheckBox check = new CheckBox(this); check.setContentDescription(track.title() + "を選択"); check.setTextColor(MUTED);
             check.setMinHeight(dp(48)); check.setChecked(selected.contains(track.url())); check.setEnabled(!track.live());
             check.setOnCheckedChangeListener((v, checked) -> {
                 if (checked) selected.add(track.url()); else selected.remove(track.url());
-                selectionStatus.setText(getString(R.string.selected_tracks, selected.size(), items.size()));
+                renderResults();
             });
-            add(card, check, 0, 6);
-            add(card, text(track.site() + " • " + MediaInfo.duration(track.duration()), 11, MINT, true), 0, 8);
-            add(card, text(track.title(), 18, TEXT, true), 0, 6);
-            add(card, text(track.artist().isEmpty() ? "投稿者情報なし" : track.artist(), 13, MUTED, false), 0, 12);
-            add(card, button("音質・形式を確認  →", true, v -> details(track)), 0, 0);
+            trackRow.addView(check, new LinearLayout.LayoutParams(dp(40), dp(48)));
+            LinearLayout names = column();
+            add(names, clipped(track.title(), 16, TEXT, true, 2), 0, 4);
+            if (!track.artist().isEmpty()) add(names, clipped(track.artist(), 12, MUTED, false, 1), 0, 4);
+            add(names, text(track.site() + " · " + MediaInfo.duration(track.duration()), 11, MUTED, false), 0, 0);
+            names.setOnClickListener(v -> details(track)); trackRow.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
+            trackRow.addView(iconButton(UiIcon.Kind.DOWNLOAD, "保存形式を選ぶ", v -> details(track)));
+            card.addView(trackRow);
             add(results, card, 0, 12);
         }
         if (items.size() > visibleCount) add(results, button(getString(R.string.load_more_tracks, items.size() - visibleCount), false,
@@ -274,7 +277,7 @@ public final class MainActivity extends Activity {
         try {
             DownloadService.start(this);
             askNotification();
-            toast("保存を開始しました。保存した音源で確認できます。");
+            toast("処理を開始しました");
         } catch (RuntimeException e) {
             downloads.update(entry.id(), "failed", "ダウンロードを開始できませんでした。再試行してください。", 0, null, null);
             toast(DownloadService.error(e));
@@ -290,11 +293,7 @@ public final class MainActivity extends Activity {
     private void showLibrary() {
         if (!library && !pitchMode && input != null) { query = input.getText().toString(); selectedSource = source.getSelectedItemPosition(); }
         library = true; pitchMode = false; tabs(); body.removeAllViews();
-        add(body, text("あなたの音源。", 30, TEXT, true), 0, 8);
-        add(body, text("保存先：ダウンロード / ToneKeep", 13, MUTED, false), 0, 18);
-        CheckBox wifi = new CheckBox(this); wifi.setText(R.string.wifi_only); wifi.setTextSize(13); wifi.setTextColor(MUTED); wifi.setMinHeight(dp(48));
-        wifi.setChecked(downloads.prefs.getBoolean("wifi", false));
-        wifi.setOnCheckedChangeListener((v, checked) -> downloads.prefs.edit().putBoolean("wifi", checked).apply()); add(body, wifi, 0, 14);
+        add(body, text("ライブラリ", 25, TEXT, true), 0, 18);
         results = column(); body.addView(results); renderDownloads(true);
     }
     private void renderDownloads(boolean force) {
@@ -304,40 +303,30 @@ public final class MainActivity extends Activity {
         results.removeAllViews();
         for (DownloadStore.Batch batch : batches) {
             if (batch.total() < 2) continue;
-            LinearLayout summary = card(); add(summary, text(batch.title(), 17, TEXT, true), 0, 8);
-            add(summary, text(batch.description(), 12, MINT, false), 0, 8);
-            if (batch.queued() + batch.running() > 0) add(summary, button("この一括保存を中止", false,
-                    v -> { downloads.cancelBatch(batch.id()); renderDownloads(true); }), 0, 4);
-            if (batch.failed() > 0) add(summary, button("失敗した曲だけ再試行", true,
-                    v -> enqueueBatch(downloads.failed(batch.id()), batch.title() + "（再試行）")), 0, 0);
+            LinearLayout summary = card(), group = row(), names = column();
+            add(names, clipped(batch.title(), 15, TEXT, true, 2), 0, 6);
+            add(names, text("完了 " + batch.complete() + "/" + batch.total() + (batch.queued() > 0 ? " · 待機 " + batch.queued() : "") + (batch.failed() > 0 ? " · 失敗 " + batch.failed() : ""), 12, MUTED, false), 0, 0);
+            group.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
+            if (batch.queued() + batch.running() > 0) group.addView(iconButton(UiIcon.Kind.CLOSE, "一括保存を中止",
+                    v -> { downloads.cancelBatch(batch.id()); renderDownloads(true); }));
+            if (batch.failed() > 0) group.addView(iconButton(UiIcon.Kind.RETRY, "失敗した曲を再試行",
+                    v -> enqueueBatch(downloads.failed(batch.id()), batch.title() + "（再試行）")));
+            summary.addView(group);
             add(results, summary, 0, 12);
         }
         if (entries.isEmpty()) {
-            LinearLayout empty = card(); add(empty, text("↓", 46, MINT, true), 4, 8);
-            add(empty, text("お気に入りの音を、ここに。", 18, TEXT, true), 0, 12);
-            add(empty, button("音楽を探す  →", true, v -> showSearch()), 0, 0); add(results, empty, 4, 0);
+            add(results, text("保存した音源はここに表示されます", 14, MUTED, false), 20, 16);
+            add(results, compactButton("検索", UiIcon.Kind.SEARCH, v -> showSearch()), 0, 0);
         }
         for (DownloadStore.Entry entry : entries) {
-            LinearLayout card = card(); add(card, text(entry.title(), 17, TEXT, true), 0, 6);
-            add(card, text(entry.quality(), 12, MINT, false), 0, 8); add(card, text(entry.message(), 12, MUTED, false), 0, 8);
-            if (entry.active()) {
-                ProgressBar p = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-                p.setIndeterminate(entry.progress() == 0); p.setProgress(entry.progress()); add(card, p, 0, 8);
-                add(card, button(entry.pitchJob() ? "キー変更を中止" : "ダウンロードを中止", false, v -> { DownloadService.cancel(this, entry.id()); renderDownloads(true); }), 0, 0);
-            } else if (entry.status().equals("complete")) {
-                add(card, button("音源を開く  ↗", true, v -> openFile(entry)), 0, 0);
-                add(card, button("この音源のキーを変更", false, v -> selectPitch(entry.contentUri(), entry.title())), 6, 0);
-                add(card, button(entry.pitchJob() ? "同じ設定で再処理" : "再ダウンロード", false, v -> retry(entry)), 6, 0);
-            } else add(card, button("再試行", true, v -> retry(entry)), 0, 0);
-            if (!entry.pitchJob()) add(card, button("配信元を開く ↗", false, v -> browse(entry.url())), 6, 0);
-            add(results, card, 0, 12);
+            add(results, entryCard(entry), 0, 10);
         }
         int remaining = downloads.count() - entries.size();
         if (remaining > 0) add(results, button(getString(R.string.load_more_history, remaining), false,
                 v -> { historyLimit += 80; renderDownloads(true); }), 0, 8);
     }
     private void retry(DownloadStore.Entry entry) {
-        try { begin(downloads.retry(entry)); renderDownloads(true); } catch (RuntimeException e) { toast(DownloadService.error(e)); }
+        try { begin(downloads.retry(entry)); if (pitchMode) renderPitchJobs(true); else renderDownloads(true); } catch (RuntimeException e) { toast(DownloadService.error(e)); }
     }
     private void selectPitch(String uri, String title) {
         pitchSourceUri = uri; pitchSourceName = title; showPitch();
@@ -345,25 +334,26 @@ public final class MainActivity extends Activity {
     private void showPitch() {
         if (!library && !pitchMode && input != null) { query = input.getText().toString(); selectedSource = source.getSelectedItemPosition(); }
         library = false; pitchMode = true; tabs(); body.removeAllViews();
-        add(body, text("歌いやすいキーに。", 29, TEXT, true), 0, 8);
-        add(body, text("ボーカルも伴奏も、曲全体をまとめて変更。テンポはそのまま。", 14, MUTED, false), 0, 18);
+        LinearLayout heading = row(); heading.addView(text("キー変更", 25, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+        heading.addView(iconButton(UiIcon.Kind.INFO, "キー変更について", v -> new AlertDialog.Builder(this).setTitle("キー変更")
+                .setMessage("ボーカルと伴奏をまとめて変更します。テンポは変えず、原本を残して別ファイルに保存します。\n\nFLAC / WAVは24bitで保存します。キー変更で音の質感が変わる場合があります。声質保持は楽器にも作用するため、曲に合わせて切り替えてください。\n\n一時ファイル用の空き容量が必要です。処理は端末内で実行します。")
+                .setPositiveButton("閉じる", null).show())); add(body, heading, 0, 12);
         LinearLayout sourceCard = card();
-        add(sourceCard, text("SOURCE AUDIO", 11, MINT, true), 0, 8);
-        add(sourceCard, text(pitchSourceUri.isEmpty() ? "音声ファイルを選んでください" : pitchSourceName, 17, TEXT, true), 0, 12);
-        add(sourceCard, button("端末の音声ファイルを選ぶ", false, v -> {
+        add(sourceCard, clipped(pitchSourceUri.isEmpty() ? "音源を選択" : pitchSourceName, 16, TEXT, true, 2), 0, 10);
+        LinearLayout pickers = row();
+        pickers.addView(compactButton("ファイル", UiIcon.Kind.FOLDER, v -> {
             try {
                 Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("audio/*").addCategory(Intent.CATEGORY_OPENABLE)
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 startActivityForResult(pick, 1067);
             } catch (ActivityNotFoundException e) { toast("ファイルを選ぶアプリが見つかりませんでした。"); }
-        }), 0, 4);
-        add(sourceCard, button("保存済みの音源から選ぶ", false, v -> showLibrary()), 0, 0);
-        add(body, sourceCard, 0, 18);
-        TextView key = text(new PitchSettings(pitchSemitones, pitchFormants, pitchOutput).label(), 27, MINT, true);
-        key.setGravity(Gravity.CENTER); add(body, key, 0, 6);
+        }), new LinearLayout.LayoutParams(0, -2, 1));
+        pickers.addView(compactButton("ライブラリ", UiIcon.Kind.LIBRARY, v -> showLibrary()), new LinearLayout.LayoutParams(0, -2, 1));
+        sourceCard.addView(pickers); add(body, sourceCard, 0, 16);
+        TextView key = text(keyLabel(), 48, MINT, true); key.setGravity(Gravity.CENTER);
         SeekBar slider = new SeekBar(this); slider.setMax(24); slider.setProgress(pitchSemitones + 12); slider.setMinHeight(dp(48));
         slider.setContentDescription("キー変更。マイナス12からプラス12半音");
-        Button export = button("テンポを保ってキー変更・保存  ↓", true, v -> {
+        Button export = button("保存", true, v -> {
             if (pitchSourceUri.isEmpty()) { toast("元の音声ファイルを選択してください。"); return; }
             if (pitchSemitones == 0) { toast("変更するキーを±ボタンやスライダーで選んでください。"); return; }
             try { begin(downloads.enqueuePitch(pitchSourceUri, pitchSourceName, new PitchSettings(pitchSemitones, pitchFormants, pitchOutput))); renderPitchJobs(true); }
@@ -372,49 +362,41 @@ public final class MainActivity extends Activity {
         export.setEnabled(!pitchSourceUri.isEmpty() && pitchSemitones != 0);
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
-                pitchSemitones = value - 12; key.setText(new PitchSettings(pitchSemitones, pitchFormants, pitchOutput).label());
+                pitchSemitones = value - 12; key.setText(keyLabel());
                 export.setEnabled(!pitchSourceUri.isEmpty() && pitchSemitones != 0);
             }
             @Override public void onStartTrackingTouch(SeekBar bar) { }
             @Override public void onStopTrackingTouch(SeekBar bar) { }
         });
-        add(body, slider, 0, 4);
         LinearLayout steps = row();
-        steps.addView(button("− 半音", false, v -> slider.setProgress(Math.max(0, slider.getProgress() - 1))), new LinearLayout.LayoutParams(0, -2, 1));
-        steps.addView(button("＋ 半音", false, v -> slider.setProgress(Math.min(24, slider.getProgress() + 1))), new LinearLayout.LayoutParams(0, -2, 1));
-        add(body, steps, 0, 12);
+        steps.addView(iconButton(UiIcon.Kind.MINUS, "半音下げる", v -> slider.setProgress(Math.max(0, slider.getProgress() - 1)))) ;
+        steps.addView(key, new LinearLayout.LayoutParams(0, -2, 1));
+        steps.addView(iconButton(UiIcon.Kind.PLUS, "半音上げる", v -> slider.setProgress(Math.min(24, slider.getProgress() + 1))));
+        add(body, steps, 0, 0);
+        TextView unit = text("半音", 12, MUTED, false); unit.setGravity(Gravity.CENTER); add(body, unit, 0, 0);
+        add(body, slider, 0, 6);
         CheckBox formants = new CheckBox(this); formants.setText(R.string.pitch_formants); formants.setTextColor(MUTED); formants.setMinHeight(dp(48));
         formants.setChecked(pitchFormants); formants.setOnCheckedChangeListener((v, checked) -> pitchFormants = checked); add(body, formants, 0, 10);
         Spinner output = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"FLAC（24bit・ロスレス圧縮）", "WAV（24bit・非圧縮）"});
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"FLAC · 24bit", "WAV · 24bit"});
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); output.setAdapter(adapter); output.setSelection(pitchOutput.equals("wav") ? 1 : 0);
         output.setContentDescription("キー変更後の保存形式");
         output.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) { pitchOutput = position == 1 ? "wav" : "flac"; }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
-        add(body, output, 0, 16); add(body, export, 0, 12);
-        add(body, text("音声処理は端末内で実行。原本は残して別ファイルに保存します。大きくキーを変えると音の質感が変わる場合があります。", 12, MUTED, false), 0, 8);
-        add(body, text("書き出し用の一時容量が必要です。処理中も画面を閉じられます。", 12, MUTED, false), 0, 18);
-        add(body, text("キー変更の履歴", 18, TEXT, true), 0, 12);
+        add(body, output, 0, 12); add(body, export, 0, 8);
+        TextView note = text("テンポ固定 · 原本を保持", 12, MUTED, false); note.setGravity(Gravity.CENTER); add(body, note, 0, 22);
+        add(body, text("履歴", 17, TEXT, true), 0, 12);
         results = column(); body.addView(results); renderPitchJobs(true);
     }
     private void renderPitchJobs(boolean force) {
         if (!pitchMode || results == null) return;
         List<DownloadStore.Entry> jobs = downloads.pitchRecent(); String snapshot = jobs.toString();
         if (!force && snapshot.equals(pitchSnapshot)) return; pitchSnapshot = snapshot; results.removeAllViews();
-        if (jobs.isEmpty()) add(results, text("保存した音源・端末内の音声を選び、変更したいキーを設定してください。", 13, MUTED, false), 0, 8);
+        if (jobs.isEmpty()) add(results, text("まだ履歴はありません", 13, MUTED, false), 0, 8);
         for (DownloadStore.Entry entry : jobs) {
-            LinearLayout card = card(); add(card, text(entry.title(), 17, TEXT, true), 0, 6);
-            add(card, text(entry.quality(), 12, MINT, false), 0, 8); add(card, text(entry.message(), 12, MUTED, false), 0, 10);
-            if (entry.active()) {
-                ProgressBar p = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); p.setIndeterminate(entry.progress() == 0); p.setProgress(entry.progress()); add(card, p, 0, 8);
-                add(card, button("この処理を中止", false, v -> { DownloadService.cancel(this, entry.id()); renderPitchJobs(true); }), 0, 0);
-            } else if (entry.status().equals("complete")) add(card, button("キー変更した音源を開く ↗", true, v -> openFile(entry)), 0, 0);
-            else add(card, button("キー変更を再試行", true, v -> {
-                try { begin(downloads.retry(entry)); renderPitchJobs(true); } catch (RuntimeException e) { toast(DownloadService.error(e)); }
-            }), 0, 0);
-            add(results, card, 0, 12);
+            add(results, entryCard(entry), 0, 10);
         }
     }
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -479,13 +461,84 @@ public final class MainActivity extends Activity {
         try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(MediaInfo.webUrl(url)))); }
         catch (RuntimeException e) { toast("リンクを開けませんでした。"); }
     }
-    private void tabs() { searchTab.setTextColor(!library && !pitchMode ? MINT : MUTED); libraryTab.setTextColor(library ? MINT : MUTED); pitchTab.setTextColor(pitchMode ? MINT : MUTED); }
+    private String keyLabel() { return pitchSemitones > 0 ? "+" + pitchSemitones : Integer.toString(pitchSemitones); }
+    private void appMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add("Wi-Fiでのみ取得").setCheckable(true).setChecked(downloads.prefs.getBoolean("wifi", false)).setOnMenuItemClickListener(item -> {
+            downloads.prefs.edit().putBoolean("wifi", !item.isChecked()).apply(); return true;
+        });
+        menu.getMenu().add("yt-dlpを更新").setOnMenuItemClickListener(item -> { updateEngine(); return true; });
+        menu.getMenu().add("ヘルプ").setOnMenuItemClickListener(item -> { about(); return true; });
+        menu.getMenu().add("ライセンス").setOnMenuItemClickListener(item -> { licenses(); return true; }); menu.show();
+    }
+    private void entryMenu(View anchor, DownloadStore.Entry entry) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        if (entry.status().equals("complete")) {
+            menu.getMenu().add("キー変更").setOnMenuItemClickListener(item -> { selectPitch(entry.contentUri(), entry.title()); return true; });
+            menu.getMenu().add(entry.pitchJob() ? "同じ設定で保存" : "もう一度ダウンロード").setOnMenuItemClickListener(item -> { retry(entry); return true; });
+        }
+        if (!entry.pitchJob()) menu.getMenu().add("配信元を開く").setOnMenuItemClickListener(item -> { browse(entry.url()); return true; });
+        menu.getMenu().add("詳細").setOnMenuItemClickListener(item -> { entryDetails(entry); return true; }); menu.show();
+    }
+    private void entryDetails(DownloadStore.Entry entry) {
+        new AlertDialog.Builder(this).setTitle("処理の詳細").setMessage(entry.title() + "\n\n" + entry.quality() + "\n\n" + entry.message())
+                .setPositiveButton("閉じる", null).show();
+    }
+    private LinearLayout entryCard(DownloadStore.Entry entry) {
+        LinearLayout card = card(), line = row(), names = column();
+        String title = entry.pitchJob() ? entry.title().replaceFirst(" \\[キー [^\\]]+\\]$", "") : entry.title();
+        add(names, clipped(title, 15, TEXT, true, 2), 0, 5);
+        String quality = entry.pitchJob() ? String.format(java.util.Locale.ROOT, "%+d · %s 24bit", entry.semitones(), entry.outputFormat().toUpperCase(java.util.Locale.ROOT))
+                : entry.formatId().isEmpty() ? "最高音質" : entry.quality();
+        add(names, clipped(quality, 12, MUTED, false, 1), 0, 5);
+        String state = switch (entry.status()) { case "complete" -> "保存済み"; case "queued" -> "待機中"; case "running", "publishing" -> "処理中 " + entry.progress() + "%"; case "cancelled" -> "中止"; default -> "失敗"; };
+        add(names, text(state, 12, entry.status().equals("failed") ? Color.rgb(249, 178, 143) : MINT, false), 0, 0);
+        line.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
+        if (entry.active()) line.addView(iconButton(UiIcon.Kind.CLOSE, "処理を中止", v -> {
+            DownloadService.cancel(this, entry.id()); if (pitchMode) renderPitchJobs(true); else renderDownloads(true);
+        }));
+        else if (entry.status().equals("complete")) line.addView(iconButton(UiIcon.Kind.PLAY, "音源を開く", v -> openFile(entry)));
+        else line.addView(iconButton(UiIcon.Kind.RETRY, "再試行", v -> retry(entry)));
+        if (entry.status().equals("failed")) line.addView(iconButton(UiIcon.Kind.INFO, "エラーの詳細", v -> entryDetails(entry)));
+        else line.addView(iconButton(UiIcon.Kind.MORE, "音源の操作", v -> entryMenu(v, entry)));
+        card.addView(line);
+        if (entry.active()) {
+            ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+            progress.setIndeterminate(entry.progress() == 0); progress.setProgress(entry.progress()); add(card, progress, 8, 0);
+        }
+        return card;
+    }
+    private void tabs() { tintNav(searchTab, !library && !pitchMode); tintNav(libraryTab, library); tintNav(pitchTab, pitchMode); }
+    private void tintNav(LinearLayout item, boolean active) {
+        int color = active ? MINT : MUTED;
+        ((ImageView) item.getChildAt(0)).getDrawable().setTint(color);
+        ((TextView) item.getChildAt(1)).setTextColor(color); item.setBackground(round(active ? CARD : BG, 16, active ? CARD : BG)); item.setSelected(active);
+    }
+    private LinearLayout navItem(UiIcon.Kind kind, String label, String description, View.OnClickListener click) {
+        LinearLayout nav = column(); nav.setGravity(Gravity.CENTER); nav.setPadding(dp(6), dp(8), dp(6), dp(8)); nav.setMinimumHeight(dp(64));
+        ImageView icon = new ImageView(this); icon.setImageDrawable(new UiIcon(kind, MUTED)); nav.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        TextView text = text(label, 11, MUTED, false); text.setGravity(Gravity.CENTER); nav.addView(text);
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO); text.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        nav.setContentDescription(description); nav.setOnClickListener(click); nav.setFocusable(true); return nav;
+    }
+    private ImageButton iconButton(UiIcon.Kind kind, String description, View.OnClickListener click) {
+        ImageButton button = new ImageButton(this); button.setImageDrawable(new UiIcon(kind, MUTED)); button.setPadding(dp(12), dp(12), dp(12), dp(12));
+        button.setScaleType(ImageView.ScaleType.FIT_CENTER); button.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
+        button.setBackground(round(Color.TRANSPARENT, 12, Color.TRANSPARENT)); button.setContentDescription(description); button.setTooltipText(description); button.setOnClickListener(click); return button;
+    }
+    private Button compactButton(String label, UiIcon.Kind kind, View.OnClickListener click) {
+        Button button = button(label, false, click); UiIcon icon = new UiIcon(kind, MUTED); icon.setBounds(0, 0, dp(18), dp(18));
+        button.setCompoundDrawables(icon, null, null, null); button.setCompoundDrawablePadding(dp(6)); button.setMinWidth(0); button.setMinimumWidth(0); return button;
+    }
+    private TextView clipped(String value, int size, int color, boolean bold, int lines) {
+        TextView view = text(value, size, color, bold); view.setMaxLines(lines); view.setEllipsize(TextUtils.TruncateAt.END); return view;
+    }
     private void setBusy(boolean value) { busy = value; if (!library && !pitchMode && progress != null) progress.setVisibility(value ? View.VISIBLE : View.GONE); }
     private boolean alive(int token) { return !isFinishing() && !isDestroyed() && generation == token; }
     private void toast(String value) { Toast.makeText(this, value, Toast.LENGTH_LONG).show(); }
     private LinearLayout column() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); return l; }
     private LinearLayout row() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.HORIZONTAL); l.setGravity(Gravity.CENTER_VERTICAL); return l; }
-    private LinearLayout card() { LinearLayout c = column(); c.setPadding(dp(18), dp(18), dp(18), dp(14)); c.setBackground(round(CARD, 18, BORDER)); return c; }
+    private LinearLayout card() { LinearLayout c = column(); c.setPadding(dp(12), dp(14), dp(8), dp(14)); c.setBackground(round(CARD, 16, CARD)); return c; }
     private TextView text(String value, int size, int color, boolean bold) {
         TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color); t.setLineSpacing(dp(3), 1);
         if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return t;
@@ -493,7 +546,12 @@ public final class MainActivity extends Activity {
     private Button button(String label, boolean primary, View.OnClickListener listener) {
         Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(14); b.setTextColor(primary ? BG : MUTED);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD); b.setMinHeight(dp(48)); b.setMinimumHeight(dp(48)); b.setPadding(dp(12), dp(8), dp(12), dp(8));
-        b.setBackground(round(primary ? MINT : BG, 12, primary ? MINT : BORDER)); b.setOnClickListener(listener); return b;
+        StateListDrawable background = new StateListDrawable();
+        background.addState(new int[]{-android.R.attr.state_enabled}, round(BORDER, 12, BORDER));
+        background.addState(new int[]{android.R.attr.state_pressed}, round(primary ? Color.rgb(151, 217, 177) : CARD, 12, BORDER));
+        background.addState(new int[]{}, round(primary ? MINT : BG, 12, primary ? MINT : BORDER));
+        b.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}}, new int[]{MUTED, primary ? BG : MUTED}));
+        b.setBackground(background); b.setOnClickListener(listener); return b;
     }
     private GradientDrawable round(int fill, int radius, int stroke) { GradientDrawable d = new GradientDrawable(); d.setColor(fill); d.setCornerRadius(dp(radius)); d.setStroke(dp(1), stroke); return d; }
     private void add(LinearLayout parent, View child, int top, int bottom) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.setMargins(0, dp(top), 0, dp(bottom)); parent.addView(child, p); }

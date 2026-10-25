@@ -3,7 +3,6 @@ package jp.tonekeep.app;
 import android.content.Context;
 import android.net.Uri;
 import android.os.SystemClock;
-import com.yausername.ffmpeg.FFmpeg;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.BufferedReader;
@@ -22,12 +21,15 @@ final class PitchEngine {
     interface Progress { void update(int percent, String message); }
     private static final ConcurrentHashMap<String, Process> processes = new ConcurrentHashMap<>();
     private static ProcessBuilder process(Context context, String executable, List<String> args, File log) throws Exception {
-        FFmpeg.getInstance().init(context.getApplicationContext());
+        // FFmpeg also links to shared libraries supplied by the Python package
+        // (including libc++_shared and libcrypto). Unpacking FFmpeg alone is insufficient.
+        YtDlpEngine.init(context.getApplicationContext());
         File nativeDir = new File(context.getApplicationInfo().nativeLibraryDir);
         List<String> command = new ArrayList<>(); command.add(new File(nativeDir, executable).getAbsolutePath()); command.addAll(args);
         ProcessBuilder builder = new ProcessBuilder(command).redirectError(log);
-        File libraries = new File(context.getNoBackupFilesDir(), "youtubedl-android/packages/ffmpeg/usr/lib");
-        builder.environment().put("LD_LIBRARY_PATH", libraries.getAbsolutePath());
+        File packages = new File(context.getNoBackupFilesDir(), "youtubedl-android/packages");
+        builder.environment().put("LD_LIBRARY_PATH", new File(packages, "python/usr/lib").getAbsolutePath()
+                + ":" + new File(packages, "ffmpeg/usr/lib").getAbsolutePath() + ":" + nativeDir.getAbsolutePath());
         builder.environment().put("TMPDIR", context.getCacheDir().getAbsolutePath());
         return builder;
     }
@@ -95,7 +97,8 @@ final class PitchEngine {
                 String detail = read(log, 32768);
                 if (detail.contains("No such filter")) throw new java.io.IOException("音声処理機能を利用できません。APKを更新してください。");
                 if (detail.contains("No space left")) throw new java.io.IOException("端末の空き容量が不足しています。");
-                throw new java.io.IOException("音声を処理できませんでした。対応形式のファイルか、空き容量を確認してください。");
+                String stage = log.getName().replace(".log", "");
+                throw new Failure(stage, code, detail);
             }
             return output.toString();
         } finally { processes.remove(id, child); if (child.isAlive()) child.destroyForcibly(); }
@@ -115,4 +118,15 @@ final class PitchEngine {
         }
     }
     static void cancel(String id) { Process process = processes.get(id); if (process != null && process.isAlive()) process.destroyForcibly(); }
+    static final class Failure extends java.io.IOException {
+        Failure(String stage, int code, String detail) {
+            super("音声処理に失敗しました（" + stage + "）\n" + safeDetail(code, detail));
+        }
+        private static String safeDetail(int code, String detail) {
+            String clean = detail.replaceAll("https?://\\S+", "[URL]")
+                    .replaceAll("/(?:data|storage|sdcard)/[^\\s\"']+", "[端末内ファイル]").trim();
+            if (clean.length() > 1600) clean = clean.substring(clean.length() - 1600);
+            return "FFmpeg exit " + code + "\n" + clean;
+        }
+    }
 }

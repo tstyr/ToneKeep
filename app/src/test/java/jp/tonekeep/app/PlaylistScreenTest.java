@@ -44,16 +44,16 @@ public class PlaylistScreenTest {
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
             MainActivity activity = controller.get();
             ViewGroup root = activity.findViewById(android.R.id.content);
-            find(root, "♭  キー変更").performClick();
-            String export = "テンポを保ってキー変更・保存  ↓";
+            description(root, "キー変更").performClick();
+            String export = "保存";
             assertFalse(find(root, export).isEnabled());
-            find(root, "端末の音声ファイルを選ぶ").performClick();
+            find(root, "ファイル").performClick();
             Intent pick = Shadows.shadowOf(activity).getNextStartedActivityForResult().intent;
             assertEquals(Intent.ACTION_OPEN_DOCUMENT, pick.getAction()); assertEquals("audio/*", pick.getType());
             assertTrue((pick.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0);
             activity.onActivityResult(1067, Activity.RESULT_OK, new Intent().setData(Uri.parse("content://audio/owned-file")));
             assertFalse(find(root, export).isEnabled());
-            find(root, "＋ 半音").performClick(); find(root, "＋ 半音").performClick();
+            description(root, "半音上げる").performClick(); description(root, "半音上げる").performClick();
             assertTrue(find(root, export).isEnabled());
             widget(root, CheckBox.class).setChecked(false);
             widget(root, Spinner.class).setSelection(1);
@@ -64,9 +64,9 @@ public class PlaylistScreenTest {
             assertFalse(widget(root, CheckBox.class).isChecked());
             assertEquals(1, widget(root, Spinner.class).getSelectedItemPosition());
             assertTrue(find(root, export).isEnabled());
-            for (int i = 0; i < 30; i++) find(root, "− 半音").performClick();
+            for (int i = 0; i < 30; i++) description(root, "半音下げる").performClick();
             assertEquals(0, widget(root, SeekBar.class).getProgress());
-            for (int i = 0; i < 12; i++) find(root, "＋ 半音").performClick();
+            for (int i = 0; i < 12; i++) description(root, "半音上げる").performClick();
             assertFalse(find(root, export).isEnabled());
         }
     }
@@ -88,17 +88,22 @@ public class PlaylistScreenTest {
             assertTrue(find(root, "全選択").performClick());
             Field selectedField = MainActivity.class.getDeclaredField("selected"); selectedField.setAccessible(true);
             assertEquals(1000, ((Set<?>) selectedField.get(activity)).size());
-            assertTrue(find(root, "選択した曲を一括保存  ↓").isShown());
+            assertTrue(find(root, "保存（1000）").isShown());
             Bundle saved = new Bundle(); controller.saveInstanceState(saved);
             Parcel parcel = Parcel.obtain();
             try { saved.writeToParcel(parcel, 0); assertTrue("Saved state must not contain the playlist", parcel.dataSize() < 32768); }
             finally { parcel.recycle(); }
             assertNotNull(activity.onRetainNonConfigurationInstance());
-            find(root, "選択を解除").performClick(); assertTrue(((Set<?>) selectedField.get(activity)).isEmpty());
+            description(root, "選択を解除").performClick(); assertTrue(((Set<?>) selectedField.get(activity)).isEmpty());
         }
     }
     private Button find(View root, String text) {
         Button result = search(root, text); assertNotNull("Missing button: " + text, result); return result;
+    }
+    private View description(View root, String value) {
+        if (value.contentEquals(root.getContentDescription() == null ? "" : root.getContentDescription())) return root;
+        if (root instanceof ViewGroup group) for (int i = 0; i < group.getChildCount(); i++) { View found = description(group.getChildAt(i), value); if (found != null) return found; }
+        return null;
     }
     private Button search(View root, String text) {
         if (root instanceof Button button && button.getText().toString().equals(text)) return button;

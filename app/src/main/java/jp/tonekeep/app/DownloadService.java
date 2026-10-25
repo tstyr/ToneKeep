@@ -177,6 +177,7 @@ public final class DownloadService extends Service {
         return builder.build();
     }
     static String error(Exception e) {
+        if (e instanceof PitchEngine.Failure) return e.getMessage();
         String text = e.getMessage();
         if (text == null || text.isEmpty()) return "取得に失敗しました。通信状態とURLを確認してください。";
         String lower = text.toLowerCase(java.util.Locale.ROOT);

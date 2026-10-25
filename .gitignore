@@ -4,6 +4,7 @@ local.properties
 .idea/
 *.iml
 .tools/
+.codex-attachments/
 *.jks
 *.keystore
 !.ci/preview.keystore
