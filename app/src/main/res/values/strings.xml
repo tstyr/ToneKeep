@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ToneKeep</string>
+    <string name="searching">「%1$s」を検索しています…</string>
+    <string name="search_count">検索結果 %1$d件 / 候補 %2$d件</string>
+</resources>

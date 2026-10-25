@@ -1,0 +1,10 @@
+.gradle/
+**/build/
+local.properties
+.idea/
+*.iml
+.tools/
+*.jks
+*.keystore
+!.ci/preview.keystore
+!gradle/wrapper/gradle-wrapper.jar
