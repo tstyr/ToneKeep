@@ -47,6 +47,8 @@ public class PlaylistScreenTest {
             description(root, "キー変更").performClick();
             String export = "保存";
             assertFalse(find(root, export).isEnabled());
+            for (android.view.ViewParent parent = find(root, export).getParent(); parent != null; parent = parent.getParent())
+                assertFalse("Save must stay outside the scrollable controls", parent instanceof android.widget.ScrollView);
             find(root, "ファイル").performClick();
             Intent pick = Shadows.shadowOf(activity).getNextStartedActivityForResult().intent;
             assertEquals(Intent.ACTION_OPEN_DOCUMENT, pick.getAction()); assertEquals("audio/*", pick.getType());

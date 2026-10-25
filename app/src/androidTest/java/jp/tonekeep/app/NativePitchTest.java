@@ -83,6 +83,16 @@ public class NativePitchTest {
             instrumentation.runOnMainSync(() -> {
                 try { select.invoke(activity, created.get(0).toString(), "ずっと真夜中でいいのに。『あいつら全員同窓会』MV (ZUTOMAYO - Inside Joke)"); }
                 catch (Exception error) { throw new RuntimeException(error); }
+                findDescription(activity.findViewById(android.R.id.content), "半音下げる").performClick();
+                findDescription(activity.findViewById(android.R.id.content), "半音下げる").performClick();
+                findDescription(activity.findViewById(android.R.id.content), "半音下げる").performClick();
+            });
+            instrumentation.waitForIdleSync();
+            instrumentation.runOnMainSync(() -> {
+                View save = findDescription(activity.findViewById(android.R.id.content), "テンポを保って保存");
+                android.graphics.Rect visible = new android.graphics.Rect();
+                assertTrue(save.isEnabled()); assertTrue(save.getGlobalVisibleRect(visible));
+                assertEquals("Save must be fully visible on a 360dp screen", save.getHeight(), visible.height());
             });
             capture("pitch");
             for (String tab : List.of("ライブラリ", "検索画面")) {

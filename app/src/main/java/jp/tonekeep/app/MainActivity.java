@@ -52,7 +52,7 @@ public final class MainActivity extends Activity {
     private DownloadStore downloads;
     private EditText input;
     private Spinner source;
-    private LinearLayout body, results;
+    private LinearLayout body, results, actions;
     private TextView status;
     private TextView selectionStatus;
     private LinearLayout searchTab, libraryTab, pitchTab;
@@ -119,6 +119,7 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
         body = column(); body.setPadding(dp(20), dp(14), dp(20), dp(20)); scroll.addView(body);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        actions = column(); actions.setPadding(dp(20), dp(6), dp(20), dp(6)); actions.setVisibility(View.GONE); root.addView(actions);
         LinearLayout nav = row(); nav.setPadding(dp(12), dp(6), dp(12), dp(6));
         searchTab = navItem(UiIcon.Kind.SEARCH, "検索", "検索画面", v -> showSearch());
         libraryTab = navItem(UiIcon.Kind.LIBRARY, "音源", "ライブラリ", v -> showLibrary());
@@ -129,6 +130,7 @@ public final class MainActivity extends Activity {
         root.addView(nav); setContentView(root); showSearch();
     }
     private void showSearch() {
+        actions.removeAllViews(); actions.setVisibility(View.GONE);
         library = false; pitchMode = false; tabs(); body.removeAllViews();
         add(body, text("検索", 25, TEXT, true), 0, 12);
         source = new Spinner(this);
@@ -291,6 +293,7 @@ public final class MainActivity extends Activity {
             }
     }
     private void showLibrary() {
+        actions.removeAllViews(); actions.setVisibility(View.GONE);
         if (!library && !pitchMode && input != null) { query = input.getText().toString(); selectedSource = source.getSelectedItemPosition(); }
         library = true; pitchMode = false; tabs(); body.removeAllViews();
         add(body, text("ライブラリ", 25, TEXT, true), 0, 18);
@@ -337,9 +340,10 @@ public final class MainActivity extends Activity {
         LinearLayout heading = row(); heading.addView(text("キー変更", 25, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
         heading.addView(iconButton(UiIcon.Kind.INFO, "キー変更について", v -> new AlertDialog.Builder(this).setTitle("キー変更")
                 .setMessage("ボーカルと伴奏をまとめて変更します。テンポは変えず、原本を残して別ファイルに保存します。\n\nFLAC / WAVは24bitで保存します。キー変更で音の質感が変わる場合があります。声質保持は楽器にも作用するため、曲に合わせて切り替えてください。\n\n一時ファイル用の空き容量が必要です。処理は端末内で実行します。")
-                .setPositiveButton("閉じる", null).show())); add(body, heading, 0, 12);
+                .setPositiveButton("閉じる", null).show())); add(body, heading, 0, 8);
         LinearLayout sourceCard = card();
-        add(sourceCard, clipped(pitchSourceUri.isEmpty() ? "音源を選択" : pitchSourceName, 16, TEXT, true, 2), 0, 10);
+        sourceCard.setPadding(dp(12), dp(10), dp(8), dp(10));
+        add(sourceCard, clipped(pitchSourceUri.isEmpty() ? "音源を選択" : pitchSourceName, 16, TEXT, true, 2), 0, 6);
         LinearLayout pickers = row();
         pickers.addView(compactButton("ファイル", UiIcon.Kind.FOLDER, v -> {
             try {
@@ -349,8 +353,8 @@ public final class MainActivity extends Activity {
             } catch (ActivityNotFoundException e) { toast("ファイルを選ぶアプリが見つかりませんでした。"); }
         }), new LinearLayout.LayoutParams(0, -2, 1));
         pickers.addView(compactButton("ライブラリ", UiIcon.Kind.LIBRARY, v -> showLibrary()), new LinearLayout.LayoutParams(0, -2, 1));
-        sourceCard.addView(pickers); add(body, sourceCard, 0, 16);
-        TextView key = text(keyLabel(), 48, MINT, true); key.setGravity(Gravity.CENTER);
+        sourceCard.addView(pickers); add(body, sourceCard, 0, 8);
+        TextView key = text(keyLabel(), 42, MINT, true); key.setGravity(Gravity.CENTER);
         SeekBar slider = new SeekBar(this); slider.setMax(24); slider.setProgress(pitchSemitones + 12); slider.setMinHeight(dp(48));
         slider.setContentDescription("キー変更。マイナス12からプラス12半音");
         Button export = button("保存", true, v -> {
@@ -359,6 +363,8 @@ public final class MainActivity extends Activity {
             try { begin(downloads.enqueuePitch(pitchSourceUri, pitchSourceName, new PitchSettings(pitchSemitones, pitchFormants, pitchOutput))); renderPitchJobs(true); }
             catch (RuntimeException e) { toast(DownloadService.error(e)); }
         });
+        export.setContentDescription("テンポを保って保存");
+        actions.removeAllViews(); add(actions, export, 0, 0); actions.setVisibility(View.VISIBLE);
         export.setEnabled(!pitchSourceUri.isEmpty() && pitchSemitones != 0);
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
@@ -376,7 +382,7 @@ public final class MainActivity extends Activity {
         TextView unit = text("半音", 12, MUTED, false); unit.setGravity(Gravity.CENTER); add(body, unit, 0, 0);
         add(body, slider, 0, 6);
         CheckBox formants = new CheckBox(this); formants.setText(R.string.pitch_formants); formants.setTextColor(MUTED); formants.setMinHeight(dp(48));
-        formants.setChecked(pitchFormants); formants.setOnCheckedChangeListener((v, checked) -> pitchFormants = checked); add(body, formants, 0, 10);
+        formants.setChecked(pitchFormants); formants.setOnCheckedChangeListener((v, checked) -> pitchFormants = checked); add(body, formants, 0, 4);
         Spinner output = new Spinner(this);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"FLAC · 24bit", "WAV · 24bit"});
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); output.setAdapter(adapter); output.setSelection(pitchOutput.equals("wav") ? 1 : 0);
@@ -385,8 +391,7 @@ public final class MainActivity extends Activity {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) { pitchOutput = position == 1 ? "wav" : "flac"; }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
-        add(body, output, 0, 12); add(body, export, 0, 8);
-        TextView note = text("テンポ固定 · 原本を保持", 12, MUTED, false); note.setGravity(Gravity.CENTER); add(body, note, 0, 22);
+        add(body, output, 0, 18);
         add(body, text("履歴", 17, TEXT, true), 0, 12);
         results = column(); body.addView(results); renderPitchJobs(true);
     }
