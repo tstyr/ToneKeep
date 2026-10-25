@@ -375,7 +375,12 @@ public final class MainActivity extends Activity {
             catch (RuntimeException e) { toast(DownloadService.error(e)); }
         });
         export.setContentDescription("テンポを保って保存");
-        actions.removeAllViews(); add(actions, export, 0, 0); actions.setVisibility(View.VISIBLE);
+        Button preview = compactButton("試聴", UiIcon.Kind.PLAY, v -> requestPreview(0));
+        preview.setContentDescription("キー変更をプレビュー再生"); preview.setEnabled(!pitchSourceUri.isEmpty());
+        LinearLayout saveRow = row();
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(0, -2, 1); previewParams.rightMargin = dp(8);
+        saveRow.addView(preview, previewParams); saveRow.addView(export, new LinearLayout.LayoutParams(0, -2, 1));
+        actions.removeAllViews(); add(actions, saveRow, 0, 0); actions.setVisibility(View.VISIBLE);
         export.setEnabled(!pitchSourceUri.isEmpty() && pitchSemitones != 0);
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
@@ -393,19 +398,22 @@ public final class MainActivity extends Activity {
         add(body, steps, 0, 0);
         TextView unit = text("半音", 12, MUTED, false); unit.setGravity(Gravity.CENTER); add(body, unit, 0, 0);
         add(body, slider, 0, 6);
-        CheckBox formants = new CheckBox(this); formants.setText(R.string.pitch_formants); formants.setTextColor(MUTED); formants.setMinHeight(dp(48));
-        formants.setChecked(pitchFormants); formants.setOnCheckedChangeListener((v, checked) -> { pitchFormants = checked; pitchEdited(); }); add(body, formants, 0, 4);
-        Button preview = compactButton("試聴 · 20秒", UiIcon.Kind.PLAY, v -> requestPreview(0));
-        preview.setContentDescription("キー変更をプレビュー再生"); preview.setEnabled(!pitchSourceUri.isEmpty()); add(body, preview, 0, 6);
+        CheckBox formants = new CheckBox(this); formants.setText(R.string.pitch_formants); formants.setTextSize(13); formants.setTextColor(MUTED); formants.setMinHeight(dp(48));
+        formants.setChecked(pitchFormants); formants.setOnCheckedChangeListener((v, checked) -> { pitchFormants = checked; pitchEdited(); });
         Spinner output = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, PitchSettings.FORMAT_LABELS);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, PitchSettings.FORMAT_LABELS) {
+            @Override public View getView(int position, View convertView, android.view.ViewGroup parent) {
+                TextView item = (TextView) super.getView(position, convertView, parent); item.setTextSize(13); item.setSingleLine(true); item.setEllipsize(TextUtils.TruncateAt.END); return item;
+            }
+        };
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); output.setAdapter(adapter); output.setSelection(Math.max(0, PitchSettings.FORMATS.indexOf(pitchOutput)));
         output.setContentDescription("キー変更後の保存形式");
         output.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) { pitchOutput = PitchSettings.FORMATS.get(position); }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
-        add(body, output, 0, 18);
+        LinearLayout settingsRow = row(); settingsRow.addView(formants, new LinearLayout.LayoutParams(0, -2, 1));
+        settingsRow.addView(output, new LinearLayout.LayoutParams(0, dp(48), 1)); add(body, settingsRow, 0, 14);
         add(body, text("履歴", 17, TEXT, true), 0, 12);
         results = column(); body.addView(results); renderPitchJobs(true);
     }

@@ -153,6 +153,9 @@ public class NativePitchTest {
                 android.graphics.Rect visible = new android.graphics.Rect();
                 assertTrue(save.isEnabled()); assertTrue(save.getGlobalVisibleRect(visible));
                 assertEquals("Save must be fully visible on a 360dp screen", save.getHeight(), visible.height());
+                View preview = findDescription(activity.findViewById(android.R.id.content), "キー変更をプレビュー再生");
+                assertTrue(preview.isEnabled()); assertTrue(preview.getGlobalVisibleRect(visible));
+                assertEquals("Preview must be fully visible on a 360dp screen", preview.getHeight(), visible.height());
             });
             capture("pitch");
             for (String tab : List.of("ライブラリ", "検索画面")) {
