@@ -61,6 +61,11 @@ public final class MainActivity extends Activity {
     private int pitchSemitones;
     private boolean pitchFormants = true;
     private String pitchOutput = "flac";
+    private AudioPlayer player;
+    private PreviewAudio previewAudio;
+    private boolean previewWanted;
+    private int previewPosition, listenGeneration;
+    private final Runnable previewChange = () -> requestPreview(previewPosition);
     private ProgressBar progress;
     private final List<MediaInfo.Track> items = new ArrayList<>();
     private final Set<String> selected = new LinkedHashSet<>();
@@ -77,6 +82,7 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
         downloads = new DownloadStore(this);
+        previewAudio = new PreviewAudio(this);
         if (saved != null) {
             query = saved.getString("query", ""); selectedSource = saved.getInt("source");
             pitchSourceUri = saved.getString("pitch_uri", ""); pitchSourceName = saved.getString("pitch_name", "");
@@ -120,6 +126,7 @@ public final class MainActivity extends Activity {
         body = column(); body.setPadding(dp(20), dp(14), dp(20), dp(20)); scroll.addView(body);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         actions = column(); actions.setPadding(dp(20), dp(6), dp(20), dp(6)); actions.setVisibility(View.GONE); root.addView(actions);
+        player = new AudioPlayer(this, this::requestPreview, this::cancelListening, this::pauseListening); root.addView(player.view);
         LinearLayout nav = row(); nav.setPadding(dp(12), dp(6), dp(12), dp(6));
         searchTab = navItem(UiIcon.Kind.SEARCH, "検索", "検索画面", v -> showSearch());
         libraryTab = navItem(UiIcon.Kind.LIBRARY, "音源", "ライブラリ", v -> showLibrary());
@@ -332,6 +339,7 @@ public final class MainActivity extends Activity {
         try { begin(downloads.retry(entry)); if (pitchMode) renderPitchJobs(true); else renderDownloads(true); } catch (RuntimeException e) { toast(DownloadService.error(e)); }
     }
     private void selectPitch(String uri, String title) {
+        if (!pitchSourceUri.equals(uri) && previewWanted) { cancelListening(); player.stop(); }
         pitchSourceUri = uri; pitchSourceName = title; showPitch();
     }
     private void showPitch() {
@@ -339,11 +347,14 @@ public final class MainActivity extends Activity {
         library = false; pitchMode = true; tabs(); body.removeAllViews();
         LinearLayout heading = row(); heading.addView(text("キー変更", 25, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
         heading.addView(iconButton(UiIcon.Kind.INFO, "キー変更について", v -> new AlertDialog.Builder(this).setTitle("キー変更")
-                .setMessage("ボーカルと伴奏をまとめて変更します。テンポは変えず、原本を残して別ファイルに保存します。\n\nFLAC / WAVは24bitで保存します。キー変更で音の質感が変わる場合があります。声質保持は楽器にも作用するため、曲に合わせて切り替えてください。\n\n一時ファイル用の空き容量が必要です。処理は端末内で実行します。")
+                .setMessage("ボーカルと伴奏をまとめて変更します。テンポは変えず、原本を残して別ファイルに保存します。\n\n試聴は選んだ位置から20秒間。再生バーで位置を変えられます。キー・声質の変更後は短い準備を挟んで再生します。\n\nFLAC / WAVは24bit。MP3・AAC・Opus・Vorbisは非可逆圧縮、48kHz・ステレオで保存します。元の音質を超える変換ではありません。\n\nキー変更で音の質感が変わる場合があります。声質保持は楽器にも作用します。一時ファイル用の空き容量が必要です。処理は端末内で実行します。")
                 .setPositiveButton("閉じる", null).show())); add(body, heading, 0, 8);
         LinearLayout sourceCard = card();
         sourceCard.setPadding(dp(12), dp(10), dp(8), dp(10));
-        add(sourceCard, clipped(pitchSourceUri.isEmpty() ? "音源を選択" : pitchSourceName, 16, TEXT, true, 2), 0, 6);
+        LinearLayout sourceTitle = row();
+        sourceTitle.addView(clipped(pitchSourceUri.isEmpty() ? "音源を選択" : pitchSourceName, 16, TEXT, true, 2), new LinearLayout.LayoutParams(0, -2, 1));
+        ImageButton original = iconButton(UiIcon.Kind.PLAY, "元音源を再生", v -> playAudio(pitchSourceUri, pitchSourceName)); original.setEnabled(!pitchSourceUri.isEmpty());
+        sourceTitle.addView(original); add(sourceCard, sourceTitle, 0, 6);
         LinearLayout pickers = row();
         pickers.addView(compactButton("ファイル", UiIcon.Kind.FOLDER, v -> {
             try {
@@ -370,6 +381,7 @@ public final class MainActivity extends Activity {
             @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
                 pitchSemitones = value - 12; key.setText(keyLabel());
                 export.setEnabled(!pitchSourceUri.isEmpty() && pitchSemitones != 0);
+                pitchEdited();
             }
             @Override public void onStartTrackingTouch(SeekBar bar) { }
             @Override public void onStopTrackingTouch(SeekBar bar) { }
@@ -382,13 +394,15 @@ public final class MainActivity extends Activity {
         TextView unit = text("半音", 12, MUTED, false); unit.setGravity(Gravity.CENTER); add(body, unit, 0, 0);
         add(body, slider, 0, 6);
         CheckBox formants = new CheckBox(this); formants.setText(R.string.pitch_formants); formants.setTextColor(MUTED); formants.setMinHeight(dp(48));
-        formants.setChecked(pitchFormants); formants.setOnCheckedChangeListener((v, checked) -> pitchFormants = checked); add(body, formants, 0, 4);
+        formants.setChecked(pitchFormants); formants.setOnCheckedChangeListener((v, checked) -> { pitchFormants = checked; pitchEdited(); }); add(body, formants, 0, 4);
+        Button preview = compactButton("試聴 · 20秒", UiIcon.Kind.PLAY, v -> requestPreview(0));
+        preview.setContentDescription("キー変更をプレビュー再生"); preview.setEnabled(!pitchSourceUri.isEmpty()); add(body, preview, 0, 6);
         Spinner output = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"FLAC · 24bit", "WAV · 24bit"});
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); output.setAdapter(adapter); output.setSelection(pitchOutput.equals("wav") ? 1 : 0);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, PitchSettings.FORMAT_LABELS);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); output.setAdapter(adapter); output.setSelection(Math.max(0, PitchSettings.FORMATS.indexOf(pitchOutput)));
         output.setContentDescription("キー変更後の保存形式");
         output.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) { pitchOutput = position == 1 ? "wav" : "flac"; }
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) { pitchOutput = PitchSettings.FORMATS.get(position); }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
         add(body, output, 0, 18);
@@ -420,16 +434,48 @@ public final class MainActivity extends Activity {
         selectPitch(uri.toString(), name);
     }
     private void openFile(DownloadStore.Entry entry) {
-        try {
-            Uri uri = Uri.parse(entry.contentUri());
-            try (android.os.ParcelFileDescriptor descriptor = getContentResolver().openFileDescriptor(uri, "r")) {
-                if (descriptor == null) throw new java.io.FileNotFoundException();
+        playAudio(entry.contentUri(), entry.title());
+    }
+    private void playAudio(String uri, String name) {
+        cancelListening(); player.stop(); int token = listenGeneration;
+        player.load(Uri.parse(uri), name, false, 0, 0, () -> {
+            if (token != listenGeneration) return;
+            player.busy(name);
+            previewAudio.decode(uri, new PreviewAudio.Callback() {
+                @Override public void ready(PreviewAudio.Result result) {
+                    if (token == listenGeneration) player.load(Uri.fromFile(result.file()), name, false, 0, result.durationMs(), () -> listenFailed(token, "この音源を再生できません。"));
+                }
+                @Override public void failed(Exception error) { listenFailed(token, DownloadService.error(error)); }
+            });
+        });
+    }
+    private void cancelListening() { ++listenGeneration; previewWanted = false; handler.removeCallbacks(previewChange); previewAudio.cancel(); }
+    private void requestPreview(int startMs) {
+        if (pitchSourceUri.isEmpty()) return;
+        cancelListening(); previewWanted = true; previewPosition = Math.max(0, startMs); int token = listenGeneration;
+        String name = String.format(java.util.Locale.ROOT, "試聴 · %+d · %s", pitchSemitones, pitchSourceName);
+        player.busy(name);
+        previewAudio.preview(pitchSourceUri, new PitchSettings(pitchSemitones, pitchFormants, "wav"), previewPosition, new PreviewAudio.Callback() {
+            @Override public void ready(PreviewAudio.Result result) {
+                if (token != listenGeneration) return;
+                previewPosition = result.offsetMs();
+                player.load(Uri.fromFile(result.file()), name, true, result.offsetMs(), result.durationMs(), () -> listenFailed(token, "試聴を再生できません。"));
             }
-            String mime = getContentResolver().getType(uri);
-            Intent open = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime != null && mime.startsWith("audio/") ? mime : "audio/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(open, "音源を開く"));
-        } catch (ActivityNotFoundException e) { toast("この形式に対応する音楽プレーヤーをインストールしてください。"); }
-        catch (Exception e) { toast("ファイルが見つかりません。履歴から再試行できます。"); }
+            @Override public void failed(Exception error) { listenFailed(token, DownloadService.error(error)); }
+        });
+    }
+    private void pitchEdited() {
+        if (!previewWanted) return;
+        boolean resume = player.isPlaying() || player.isPreparing();
+        if (!player.isPreparing()) previewPosition = player.position();
+        cancelListening(); player.stop();
+        if (resume) { previewWanted = true; player.busy("試聴"); handler.postDelayed(previewChange, 500); }
+    }
+    private void listenFailed(int token, String message) { if (token == listenGeneration) { cancelListening(); player.stop(); toast(message); } }
+    private void pauseListening() {
+        if (player == null) return;
+        player.pause();
+        if (player.isPreparing() || handler.hasCallbacks(previewChange)) { cancelListening(); player.stop(); }
     }
     private void updateEngine() {
         if (busy || downloads.active()) { toast("検索や保存が完了してから更新してください。"); return; }
@@ -493,7 +539,7 @@ public final class MainActivity extends Activity {
         LinearLayout card = card(), line = row(), names = column();
         String title = entry.pitchJob() ? entry.title().replaceFirst(" \\[キー [^\\]]+\\]$", "") : entry.title();
         add(names, clipped(title, 15, TEXT, true, 2), 0, 5);
-        String quality = entry.pitchJob() ? String.format(java.util.Locale.ROOT, "%+d · %s 24bit", entry.semitones(), entry.outputFormat().toUpperCase(java.util.Locale.ROOT))
+        String quality = entry.pitchJob() ? String.format(java.util.Locale.ROOT, "%+d · %s", entry.semitones(), new PitchSettings(entry.semitones(), entry.preserveFormants(), entry.outputFormat()).formatLabel())
                 : entry.formatId().isEmpty() ? "最高音質" : entry.quality();
         add(names, clipped(quality, 12, MUTED, false, 1), 0, 5);
         String state = switch (entry.status()) { case "complete" -> "保存済み"; case "queued" -> "待機中"; case "running", "publishing" -> "処理中 " + entry.progress() + "%"; case "cancelled" -> "中止"; default -> "失敗"; };
@@ -502,7 +548,7 @@ public final class MainActivity extends Activity {
         if (entry.active()) line.addView(iconButton(UiIcon.Kind.CLOSE, "処理を中止", v -> {
             DownloadService.cancel(this, entry.id()); if (pitchMode) renderPitchJobs(true); else renderDownloads(true);
         }));
-        else if (entry.status().equals("complete")) line.addView(iconButton(UiIcon.Kind.PLAY, "音源を開く", v -> openFile(entry)));
+        else if (entry.status().equals("complete")) line.addView(iconButton(UiIcon.Kind.PLAY, "アプリ内で再生", v -> openFile(entry)));
         else line.addView(iconButton(UiIcon.Kind.RETRY, "再試行", v -> retry(entry)));
         if (entry.status().equals("failed")) line.addView(iconButton(UiIcon.Kind.INFO, "エラーの詳細", v -> entryDetails(entry)));
         else line.addView(iconButton(UiIcon.Kind.MORE, "音源の操作", v -> entryMenu(v, entry)));
@@ -571,9 +617,13 @@ public final class MainActivity extends Activity {
         return new LookupState(new ArrayList<>(items), new LinkedHashSet<>(selected), collectionTitle, searched);
     }
     @Override protected void onResume() { super.onResume(); handler.post(refresh); }
-    @Override protected void onPause() { super.onPause(); handler.removeCallbacks(refresh); }
+    @Override protected void onPause() {
+        super.onPause(); handler.removeCallbacks(refresh);
+        pauseListening();
+    }
     @Override protected void onDestroy() {
         ++generation; if (request != null) request.cancel(true); YtDlpEngine.cancel(processId);
-        worker.shutdownNow(); handler.removeCallbacksAndMessages(null); super.onDestroy();
+        worker.shutdownNow(); handler.removeCallbacksAndMessages(null);
+        if (player != null) player.close(); if (previewAudio != null) previewAudio.close(); super.onDestroy();
     }
 }

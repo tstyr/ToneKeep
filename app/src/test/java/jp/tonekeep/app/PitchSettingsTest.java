@@ -29,6 +29,6 @@ public class PitchSettingsTest {
     @Test public void unsupportedSettingsAreRejectedBeforeStartingNativeProcess() {
         assertThrows(IllegalArgumentException.class, () -> new PitchSettings(13, true, "flac"));
         assertThrows(IllegalArgumentException.class, () -> new PitchSettings(-13, true, "wav"));
-        assertThrows(IllegalArgumentException.class, () -> new PitchSettings(3, true, "mp3"));
+        assertThrows(IllegalArgumentException.class, () -> new PitchSettings(3, true, "exe"));
     }
 }

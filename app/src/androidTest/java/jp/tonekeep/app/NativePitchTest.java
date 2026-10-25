@@ -78,6 +78,35 @@ public class NativePitchTest {
                 }
                 index++;
             }
+            // Every newly offered encoder must work in the APK, then play inside the app.
+            var open = MainActivity.class.getDeclaredMethod("openFile", DownloadStore.Entry.class); open.setAccessible(true);
+            var playerField = MainActivity.class.getDeclaredField("player"); playerField.setAccessible(true);
+            AudioPlayer player = (AudioPlayer) playerField.get(activity);
+            for (String extension : PitchSettings.FORMATS) {
+                DownloadStore.Entry entry = store.enqueuePitch(created.get(0).toString(), "Output " + extension, new PitchSettings(4, true, extension));
+                instrumentation.runOnMainSync(() -> DownloadService.start(app));
+                long deadline = System.currentTimeMillis() + 120_000;
+                while (store.find(entry.id()).active() && System.currentTimeMillis() < deadline) Thread.sleep(250);
+                DownloadStore.Entry result = store.find(entry.id());
+                assertEquals("Native " + extension + ": " + result.message(), "complete", result.status());
+                Uri destination = Uri.parse(result.contentUri()); created.add(destination);
+                try (var descriptor = app.getContentResolver().openFileDescriptor(destination, "r")) {
+                    MediaExtractor extractor = new MediaExtractor();
+                    try {
+                        extractor.setDataSource(descriptor.getFileDescriptor());
+                        MediaFormat format = extractor.getTrackFormat(0);
+                        String mime = switch (extension) { case "flac" -> "audio/flac"; case "wav" -> "audio/raw"; case "mp3" -> "audio/mpeg"; case "m4a" -> "audio/mp4a-latm"; case "opus" -> "audio/opus"; default -> "audio/vorbis"; };
+                        assertEquals(mime, format.getString(MediaFormat.KEY_MIME));
+                        assertEquals(48000, format.getInteger(MediaFormat.KEY_SAMPLE_RATE));
+                        assertEquals(2, format.getInteger(MediaFormat.KEY_CHANNEL_COUNT));
+                        assertEquals(6_000_000, format.getLong(MediaFormat.KEY_DURATION), 120_000);
+                    } finally { extractor.release(); }
+                }
+                instrumentation.runOnMainSync(() -> { try { open.invoke(activity, result); } catch (Exception error) { throw new RuntimeException(error); } });
+                awaitPlaying(player);
+                instrumentation.runOnMainSync(() -> player.seekTo(1500)); Thread.sleep(300);
+                instrumentation.runOnMainSync(() -> { assertTrue(player.position() >= 1400); player.pause(); assertFalse(player.isPlaying()); });
+            }
             // Actual Android screenshots of all three screens, including realistic titles.
             var select = MainActivity.class.getDeclaredMethod("selectPitch", String.class, String.class); select.setAccessible(true);
             instrumentation.runOnMainSync(() -> {
@@ -88,6 +117,27 @@ public class NativePitchTest {
                 findDescription(activity.findViewById(android.R.id.content), "半音下げる").performClick();
             });
             instrumentation.waitForIdleSync();
+            int savedCount = store.count();
+            instrumentation.runOnMainSync(() -> findDescription(activity.findViewById(android.R.id.content), "元音源を再生").performClick());
+            awaitPlaying(player);
+            instrumentation.runOnMainSync(() -> findDescription(activity.findViewById(android.R.id.content), "キー変更をプレビュー再生").performClick());
+            awaitPlaying(player);
+            // Rapid setting changes cancel stale renders; seeking rebuilds the requested section.
+            instrumentation.runOnMainSync(() -> {
+                for (int i = 0; i < 3; i++) findDescription(activity.findViewById(android.R.id.content), "半音上げる").performClick();
+            });
+            awaitPlaying(player);
+            instrumentation.runOnMainSync(() -> player.seekTo(2000));
+            awaitPlaying(player);
+            instrumentation.runOnMainSync(() -> assertTrue("Preview must start at selected source position", player.position() >= 2000));
+            assertEquals("Preview must not create saved jobs", savedCount, store.count());
+            capture("preview");
+            instrumentation.runOnMainSync(() -> {
+                findDescription(activity.findViewById(android.R.id.content), "半音下げる").performClick();
+                findDescription(activity.findViewById(android.R.id.content), "プレーヤーを閉じる").performClick();
+            });
+            Thread.sleep(750);
+            instrumentation.runOnMainSync(() -> { assertFalse(player.isPlaying()); assertEquals(View.GONE, player.view.getVisibility()); });
             instrumentation.runOnMainSync(() -> {
                 View save = findDescription(activity.findViewById(android.R.id.content), "テンポを保って保存");
                 android.graphics.Rect visible = new android.graphics.Rect();
@@ -103,6 +153,17 @@ public class NativePitchTest {
             instrumentation.runOnMainSync(activity::finish);
             for (Uri uri : created) app.getContentResolver().delete(uri, null, null);
         }
+    }
+    private void awaitPlaying(AudioPlayer player) throws Exception {
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        java.util.concurrent.atomic.AtomicBoolean playing = new java.util.concurrent.atomic.AtomicBoolean();
+        long deadline = System.currentTimeMillis() + 60_000;
+        while (System.currentTimeMillis() < deadline) {
+            instrumentation.runOnMainSync(() -> playing.set(player.isPlaying()));
+            if (playing.get()) return;
+            Thread.sleep(100);
+        }
+        fail("In-app audio did not reach playing state");
     }
     private void capture(String name) throws Exception {
         var instrumentation = InstrumentationRegistry.getInstrumentation();

@@ -96,7 +96,7 @@ final class DownloadStore {
                     new String[]{uri, Integer.toString(settings.semitones()), settings.preserveFormants() ? "1" : "0", settings.format()}) > 0)
                 throw new IllegalStateException("同じ設定のキー変更を処理中です。");
             String name = title + " [キー " + settings.label() + "]";
-            Entry e = new Entry(UUID.randomUUID().toString(), name, uri, "", settings.label() + " • テンポ維持 • " + settings.format().toUpperCase(java.util.Locale.ROOT) + " 24bit",
+            Entry e = new Entry(UUID.randomUUID().toString(), name, uri, "", settings.label() + " • テンポ維持 • " + settings.formatLabel(),
                     "queued", "キー変更の開始待ち", 0, "", "", false, "pitch", settings.semitones(), settings.preserveFormants(), settings.format());
             db.insertOrThrow("jobs", null, values(e, UUID.randomUUID().toString(), name));
             db.setTransactionSuccessful(); return e;

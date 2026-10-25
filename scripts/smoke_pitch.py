@@ -74,14 +74,17 @@ with tempfile.TemporaryDirectory(prefix="tonekeep-pitch-") as temp:
     subprocess.run(["javac", "-encoding", "UTF-8", "-d", str(classes),
                     str(ROOT / "app/src/main/java/jp/tonekeep/app/PitchSettings.java"), str(ROOT / "scripts/PitchFixtureRunner.java")], check=True, timeout=60)
     results = []
-    for key, formants, extension in [(3, True, "flac"), (-5, False, "wav"), (12, True, "flac")]:
+    for key, formants, extension in [(3, True, "flac"), (-5, False, "wav"), (12, True, "flac"), (3, True, "mp3"), (3, True, "m4a"), (3, True, "opus"), (3, True, "ogg")]:
         target = work / f"key-{key}.{extension}"
         process = subprocess.run(["java", "-cp", str(classes), "PitchFixtureRunner", str(source), str(target), str(key), str(formants).lower(), extension], capture_output=True, text=True, check=True, timeout=180)
         settings = json.loads(process.stdout)
         probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(target)], capture_output=True, text=True, check=True).stdout)
         stream = probe["streams"][0]
         assert stream["channels"] == 2 and int(stream["sample_rate"]) == RATE, stream
-        assert int(stream.get("bits_per_raw_sample") or stream.get("bits_per_sample")) == 24, stream
+        expected_codecs = {"flac": "flac", "wav": "pcm_s24le", "mp3": "mp3", "m4a": "aac", "opus": "opus", "ogg": "vorbis"}
+        assert stream["codec_name"] == expected_codecs[extension], stream
+        if extension in ("flac", "wav"):
+            assert int(stream.get("bits_per_raw_sample") or stream.get("bits_per_sample")) == 24, stream
         duration = float(probe["format"]["duration"])
         assert abs(duration - SECONDS) < .08, duration
         raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(target), "-f", "f32le", "-"], capture_output=True, check=True).stdout
@@ -94,7 +97,7 @@ with tempfile.TemporaryDirectory(prefix="tonekeep-pitch-") as temp:
         period = beat_period(left)
         assert abs(period - .5) <= .025, period
         peak = max(abs(v) for v in samples)
-        assert peak <= 10 ** (-.1 / 20) + .0002, peak
+        assert peak <= (10 ** (-.1 / 20) + .0002 if extension in ("flac", "wav") else 1.0), (extension, peak)
         results.append({"key": key, "format": extension, "duration": duration, "frequencies": [round(f, 2) for f in frequencies], "beat_period": period, "gain": settings["gain"]})
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash, "Original was modified"
     apk = ROOT / "app/build/outputs/apk/debug/app-debug.apk"

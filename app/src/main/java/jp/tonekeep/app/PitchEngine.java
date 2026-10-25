@@ -66,19 +66,20 @@ final class PitchEngine {
         execute(context, "libffmpeg.so", settings.peakArgs(intermediate), entry.id(), peakLog, active,
                 time -> progress.update(percent(time, seconds, 80, 87), "音量のピークを確認しています…"));
         double gain = PitchSettings.gainForPeak(read(peakLog, 512 * 1024));
-        progress.update(88, "24bitの音声ファイルに書き出しています…");
+        progress.update(88, "音声ファイルに書き出しています…");
         execute(context, "libffmpeg.so", settings.exportArgs(input, intermediate, output, gain), entry.id(), new File(directory, "export.log"), active,
-                time -> progress.update(percent(time, seconds, 88, 98), "24bitの音声ファイルに書き出しています…"));
+                time -> progress.update(percent(time, seconds, 88, 98), "音声ファイルに書き出しています…"));
         requireActive(active);
         if (!output.isFile() || output.length() == 0) throw new java.io.IOException("書き出した音声を確認できませんでした。");
         return output;
     }
-    private interface TimeProgress { void update(double seconds); }
-    private static String execute(Context context, String executable, List<String> args, String id, File log, BooleanSupplier active, TimeProgress progress) throws Exception {
+    interface TimeProgress { void update(double seconds); }
+    static String execute(Context context, String executable, List<String> args, String id, File log, BooleanSupplier active, TimeProgress progress) throws Exception {
         requireActive(active);
         Process child = process(context, executable, args, log).start(); processes.put(id, child);
         StringBuilder output = new StringBuilder(); long last = 0;
         try {
+            requireActive(active);
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
