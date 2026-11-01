@@ -20,6 +20,7 @@ final class DownloadStore {
     private static volatile Database instance;
     final SharedPreferences prefs;
     private final SQLiteDatabase db;
+    SQLiteDatabase database() { return db; }
     record Entry(String id, String title, String url, String formatId, String quality, String status,
                  String message, int progress, String contentUri, String filename, boolean wifiOnly,
                  String kind, int semitones, boolean preserveFormants, String outputFormat) {
@@ -165,12 +166,14 @@ final class DownloadStore {
     }
     private static final class Database extends SQLiteOpenHelper {
         private final SharedPreferences previous;
-        Database(Context context) { super(context, "downloads.db", null, 2); this.previous = context.getSharedPreferences("tonekeep", Context.MODE_PRIVATE); setWriteAheadLoggingEnabled(true); }
+        Database(Context context) { super(context, "downloads.db", null, 6); this.previous = context.getSharedPreferences("tonekeep", Context.MODE_PRIVATE); setWriteAheadLoggingEnabled(true); }
         @Override public void onCreate(SQLiteDatabase db) {
             db.execSQL("CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,title TEXT NOT NULL,url TEXT NOT NULL,format_id TEXT NOT NULL,quality TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,progress INTEGER NOT NULL,content_uri TEXT NOT NULL,filename TEXT NOT NULL,wifi INTEGER NOT NULL,batch_id TEXT NOT NULL,batch_title TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'download',semitones INTEGER NOT NULL DEFAULT 0,preserve_formants INTEGER NOT NULL DEFAULT 1,output_format TEXT NOT NULL DEFAULT 'flac')");
             db.execSQL("CREATE INDEX jobs_status ON jobs(status,seq)");
             db.execSQL("CREATE INDEX jobs_source ON jobs(url,format_id,status)");
             db.execSQL("CREATE INDEX jobs_batch ON jobs(batch_id,status)");
+            LyricsStore.createTables(db);
+            TrackMetadata.Store.create(db);
             // SQLiteOpenHelper runs onCreate in a transaction: an interrupted import is retried safely.
             String old = previous.getString("ytDownloads", "[]");
             try {
@@ -191,6 +194,11 @@ final class DownloadStore {
                 db.execSQL("ALTER TABLE jobs ADD COLUMN preserve_formants INTEGER NOT NULL DEFAULT 1");
                 db.execSQL("ALTER TABLE jobs ADD COLUMN output_format TEXT NOT NULL DEFAULT 'flac'");
             }
+            if (oldVersion < 3) LyricsStore.createTables(db);
+            if (oldVersion < 4) TrackMetadata.Store.create(db);
+            if (oldVersion >= 3 && oldVersion < 5) db.execSQL("ALTER TABLE lyrics_tasks ADD COLUMN input_document TEXT NOT NULL DEFAULT ''");
+            if (oldVersion >= 3 && oldVersion < 5) LyricsStore.createRecognitionCache(db);
+            if(oldVersion>=3&&oldVersion<6)db.execSQL("ALTER TABLE lyrics_tasks ADD COLUMN heartbeat_ms INTEGER NOT NULL DEFAULT 0");
         }
     }
 }

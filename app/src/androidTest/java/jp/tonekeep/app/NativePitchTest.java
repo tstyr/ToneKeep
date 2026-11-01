@@ -104,9 +104,11 @@ public class NativePitchTest {
                     try {
                         extractor.setDataSource(descriptor.getFileDescriptor());
                         MediaFormat format = extractor.getTrackFormat(0);
-                        // Android's FLAC extractor exposes decoded PCM (audio/raw).
+                        // Platform extractors expose FLAC as PCM on API 35, FLAC on Android 17.
                         String mime = switch (extension) { case "flac", "wav" -> "audio/raw"; case "mp3" -> "audio/mpeg"; case "m4a" -> "audio/mp4a-latm"; case "opus" -> "audio/opus"; default -> "audio/vorbis"; };
-                        assertEquals(mime, format.getString(MediaFormat.KEY_MIME));
+                        String actualMime = format.getString(MediaFormat.KEY_MIME);
+                        if (extension.equals("flac")) assertTrue("FLAC extractor MIME: " + actualMime, "audio/raw".equals(actualMime) || "audio/flac".equals(actualMime));
+                        else assertEquals(mime, actualMime);
                         assertEquals(48000, format.getInteger(MediaFormat.KEY_SAMPLE_RATE));
                         assertEquals(2, format.getInteger(MediaFormat.KEY_CHANNEL_COUNT));
                         assertEquals(6_000_000, format.getLong(MediaFormat.KEY_DURATION), 120_000);
@@ -141,7 +143,7 @@ public class NativePitchTest {
             awaitPlaying(player);
             instrumentation.runOnMainSync(() -> assertTrue("Preview must start at selected source position", player.position() >= 2000));
             assertEquals("Preview must not create saved jobs", savedCount, store.count());
-            capture("preview");
+            capture(activity,"preview");
             instrumentation.runOnMainSync(() -> {
                 findDescription(activity.findViewById(android.R.id.content), "半音下げる").performClick();
                 findDescription(activity.findViewById(android.R.id.content), "プレーヤーを閉じる").performClick();
@@ -157,13 +159,18 @@ public class NativePitchTest {
                 assertTrue(preview.isEnabled()); assertTrue(preview.getGlobalVisibleRect(visible));
                 assertEquals("Preview must be fully visible on a 360dp screen", preview.getHeight(), visible.height());
             });
-            capture("pitch");
+            capture(activity,"pitch");
             for (String tab : List.of("ライブラリ", "検索画面")) {
                 instrumentation.runOnMainSync(() -> findDescription(activity.findViewById(android.R.id.content), tab).performClick());
-                capture(tab.equals("ライブラリ") ? "library" : "search");
+                capture(activity,tab.equals("ライブラリ") ? "library" : "search");
             }
         } finally {
-            instrumentation.runOnMainSync(activity::finish);
+            instrumentation.runOnMainSync(()->{PlaybackCore.get(app).stop();activity.finish();});
+            DownloadStore cleanup=new DownloadStore(app);var db=cleanup.database();
+            for(var entry:cleanup.all())if(created.contains(Uri.parse(entry.url()))||created.contains(Uri.parse(entry.contentUri()))){
+                for(String table:List.of("lyrics_documents","lyrics_tasks","lyrics_recognition_cache","track_metadata"))db.delete(table,"audio_id=?",new String[]{entry.id()});
+                db.delete("jobs","id=?",new String[]{entry.id()});
+            }
             for (Uri uri : created) app.getContentResolver().delete(uri, null, null);
         }
     }
@@ -178,7 +185,7 @@ public class NativePitchTest {
         }
         fail("In-app audio did not reach playing state");
     }
-    private void capture(String name) throws Exception {
+    private void capture(Activity activity, String name) throws Exception {
         var instrumentation = InstrumentationRegistry.getInstrumentation();
         instrumentation.waitForIdleSync(); Thread.sleep(400);
         Context app = instrumentation.getTargetContext();
@@ -188,7 +195,9 @@ public class NativePitchTest {
         values.put(MediaStore.Downloads.RELATIVE_PATH, "Download/ToneKeep-verification");
         values.put(MediaStore.Downloads.IS_PENDING, 1);
         Uri destination = app.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values); assertNotNull(destination);
-        Bitmap bitmap = instrumentation.getUiAutomation().takeScreenshot(); assertNotNull(bitmap);
+        Bitmap[] captured = new Bitmap[1];
+        instrumentation.runOnMainSync(() -> { View root = activity.getWindow().getDecorView(); captured[0] = Bitmap.createBitmap(root.getWidth(),root.getHeight(),Bitmap.Config.ARGB_8888); root.draw(new android.graphics.Canvas(captured[0])); });
+        Bitmap bitmap = captured[0]; assertNotNull(bitmap);
         try (OutputStream output = app.getContentResolver().openOutputStream(destination)) { assertNotNull(output); assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)); }
         values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0); app.getContentResolver().update(destination, values, null, null);
         bitmap.recycle();

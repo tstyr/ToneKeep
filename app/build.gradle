@@ -3,6 +3,7 @@ plugins { id 'com.android.application' }
 android {
     namespace 'jp.tonekeep.app'
     compileSdk 35
+    ndkVersion '28.2.13676358'
     defaultConfig {
         applicationId 'jp.tonekeep.app'
         minSdk 29
@@ -11,6 +12,7 @@ android {
         versionName '1.5.0'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         ndk { abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64' }
+        externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_static'; cppFlags '-std=c++17' } }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -26,13 +28,15 @@ android {
     }
     buildTypes {
         debug {
-            applicationIdSuffix '.debug'
+            applicationIdSuffix project.hasProperty('offlineVerification') ? '.offlineverify' : '.debug'
             versionNameSuffix '-preview'
             signingConfig signingConfigs.preview
         }
         release { minifyEnabled false }
     }
     lint { abortOnError true }
+    externalNativeBuild { cmake { path file('src/main/cpp/CMakeLists.txt'); version '3.22.1' } }
+    sourceSets { androidTest { assets.srcDir rootProject.file('.tools/lyrics-test-assets') } }
     testOptions { unitTests { includeAndroidResources = true; all { maxHeapSize = '1024m' } } }
     packagingOptions {
         jniLibs {

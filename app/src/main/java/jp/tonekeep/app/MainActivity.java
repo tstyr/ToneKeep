@@ -44,8 +44,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 public final class MainActivity extends Activity {
-    private static final int BG = Color.rgb(16, 23, 22), CARD = Color.rgb(27, 37, 34), MINT = Color.rgb(183, 245, 207),
-            TEXT = Color.rgb(240, 244, 237), MUTED = Color.rgb(160, 179, 168), BORDER = Color.rgb(47, 65, 56);
+    private static final int BG = 0xff121212, CARD = 0xff202020, MINT = 0xff1ed760,
+            TEXT = 0xfffafafa, MUTED = 0xffb3b3b3, BORDER = 0xff343434;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final String processId = "lookup-" + UUID.randomUUID();
@@ -62,6 +62,9 @@ public final class MainActivity extends Activity {
     private boolean pitchFormants = true;
     private String pitchOutput = "flac";
     private AudioPlayer player;
+    private DownloadStore.Entry playingEntry;
+    private LyricsUi lyricsUi;
+    private Bundle lyricsSaved;
     private PreviewAudio previewAudio;
     private boolean previewWanted;
     private int previewPosition, listenGeneration;
@@ -76,11 +79,12 @@ public final class MainActivity extends Activity {
     private Future<?> request;
     private record LookupState(List<MediaInfo.Track> items, Set<String> selected, String title, boolean searched) { }
     private final Runnable refresh = new Runnable() {
-        @Override public void run() { if (pitchMode) renderPitchJobs(false); else if (library) renderDownloads(false); handler.postDelayed(this, 1000); }
+        @Override public void run() { syncPlayback(); if (lyricsUi != null) lyricsUi.refresh(); if (pitchMode) renderPitchJobs(false); else if (library) renderDownloads(false); handler.postDelayed(this, 1000); }
     };
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        lyricsSaved = saved;
         downloads = new DownloadStore(this);
         previewAudio = new PreviewAudio(this);
         if (saved != null) {
@@ -98,10 +102,31 @@ public final class MainActivity extends Activity {
         if (downloads.active()) {
             try { DownloadService.start(this); } catch (RuntimeException e) { toast("保存した音源の画面から再試行してください。"); }
         }
+        boolean livePlayback=PlaybackCore.get(this).active;
+        syncPlayback();
+        if(saved!=null&&!livePlayback){
+            player.restoreOptions(saved.getBoolean("player_shuffle"),saved.getInt("player_repeat"));
+            DownloadStore.Entry playing=downloads.find(saved.getString("player_id",""));
+            if(playing!=null&&playing.status().equals("complete")&&!playing.contentUri().isBlank()){
+                openFile(playing);player.restorePosition(saved.getInt("player_position"));
+                if(saved.getBoolean("player_expanded"))player.expand();
+                if(saved.getBoolean("player_lyrics_expanded"))player.expandLyrics();
+            }
+        }
+        if(livePlayback&&saved!=null){if(saved.getBoolean("player_expanded"))player.expand();if(saved.getBoolean("player_lyrics_expanded"))player.expandLyrics();}
+        if(getIntent().getBooleanExtra("playback",false))player.expand();
+        openLyricsTask(getIntent());
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
         if (intent.getBooleanExtra("library", false)) showLibrary(); else acceptShare(intent);
+        syncPlayback();if(intent.getBooleanExtra("playback",false))player.expand();
+        openLyricsTask(intent);
+    }
+    private void openLyricsTask(Intent intent){
+        String id=intent.getStringExtra("lyrics_task");if(id==null)return;LyricsStore store=new LyricsStore(this);LyricsStore.Task task=store.find(id);if(task==null)return;
+        if(task.kind().equals("model")){String model=task.model();task=store.all().stream().filter(t->!t.kind().equals("model")&&t.model().equals(model)&&t.active()).findFirst().orElse(null);}
+        if(task==null)return;DownloadStore.Entry entry=downloads.find(task.audioId());if(entry!=null&&entry.contentUri().equals(task.uri()))lyricsUi.open(entry);
     }
     private void acceptShare(Intent intent) {
         if (!Intent.ACTION_SEND.equals(intent.getAction())) return;
@@ -120,16 +145,19 @@ public final class MainActivity extends Activity {
             return insets;
         });
         LinearLayout header = row(); header.setPadding(dp(20), dp(4), dp(8), dp(4));
-        header.addView(text("ToneKeep", 22, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+        header.addView(text("ToneKeep", 18, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
         header.addView(iconButton(UiIcon.Kind.MORE, "アプリの設定", this::appMenu)); root.addView(header);
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
         body = column(); body.setPadding(dp(20), dp(14), dp(20), dp(20)); scroll.addView(body);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         actions = column(); actions.setPadding(dp(20), dp(6), dp(20), dp(6)); actions.setVisibility(View.GONE); root.addView(actions);
-        player = new AudioPlayer(this, this::requestPreview, this::cancelListening, this::pauseListening); root.addView(player.view);
-        LinearLayout nav = row(); nav.setPadding(dp(12), dp(6), dp(12), dp(6));
+        player = new AudioPlayer(this, this::requestPreview, ()->{cancelListening();playingEntry=null;}, this::pauseListening); root.addView(player.view);
+        lyricsUi = new LyricsUi(this,player,lyricsSaved,this::openFile);
+        player.transport(this::movePlayback,this::refreshTransport,()->{if(playingEntry!=null)entryMenu(player.view,playingEntry);},this::sharePlaying);
+        player.lyricsAction(()->{if(playingEntry!=null)lyricsUi.open(playingEntry);});
+        LinearLayout nav = row(); nav.setPadding(dp(12), dp(2), dp(12), dp(2));nav.setBackgroundColor(BG);
         searchTab = navItem(UiIcon.Kind.SEARCH, "検索", "検索画面", v -> showSearch());
-        libraryTab = navItem(UiIcon.Kind.LIBRARY, "音源", "ライブラリ", v -> showLibrary());
+        libraryTab = navItem(UiIcon.Kind.LIBRARY, "ライブラリ", "ライブラリ", v -> showLibrary());
         pitchTab = navItem(UiIcon.Kind.KEY, "キー", "キー変更", v -> showPitch());
         nav.addView(searchTab, new LinearLayout.LayoutParams(0, -2, 1));
         nav.addView(libraryTab, new LinearLayout.LayoutParams(0, -2, 1));
@@ -137,6 +165,7 @@ public final class MainActivity extends Activity {
         root.addView(nav); setContentView(root); showSearch();
     }
     private void showSearch() {
+        body.setPadding(dp(20),dp(14),dp(20),dp(20));
         actions.removeAllViews(); actions.setVisibility(View.GONE);
         library = false; pitchMode = false; tabs(); body.removeAllViews();
         add(body, text("検索", 25, TEXT, true), 0, 12);
@@ -303,13 +332,20 @@ public final class MainActivity extends Activity {
         actions.removeAllViews(); actions.setVisibility(View.GONE);
         if (!library && !pitchMode && input != null) { query = input.getText().toString(); selectedSource = source.getSelectedItemPosition(); }
         library = true; pitchMode = false; tabs(); body.removeAllViews();
-        add(body, text("ライブラリ", 25, TEXT, true), 0, 18);
-        results = column(); body.addView(results); renderDownloads(true);
+        body.setPadding(0,0,0,dp(20));
+        LinearLayout hero=column();hero.setPadding(dp(20),dp(14),dp(20),dp(10));
+        hero.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xff2b3159,BG}));
+        add(hero,text("マイライブラリ",24,TEXT,true),0,8);
+        LinearLayout tools=row();TextView chip=text("保存した音源",12,TEXT,true);chip.setPadding(dp(14),dp(8),dp(14),dp(8));chip.setBackground(round(CARD,20,CARD));tools.addView(chip);
+        View spacer=new View(this);tools.addView(spacer,new LinearLayout.LayoutParams(0,1,1));
+        ImageButton playAll=iconButton(UiIcon.Kind.PLAY_SOLID,"ライブラリを再生",v->downloads.all().stream().filter(e->e.status().equals("complete")&&!e.contentUri().isBlank()).findFirst().ifPresentOrElse(this::openFile,()->toast("再生できる保存済み音源がありません")));
+        playAll.setImageDrawable(new UiIcon(UiIcon.Kind.PLAY_SOLID,BG));playAll.setBackground(round(MINT,50,MINT));tools.addView(playAll);hero.addView(tools);add(body,hero,0,10);
+        results = column();results.setPadding(dp(16),0,dp(8),0);body.addView(results); renderDownloads(true);
     }
     private void renderDownloads(boolean force) {
         List<DownloadStore.Entry> entries = downloads.recent(historyLimit);
         List<DownloadStore.Batch> batches = downloads.batches();
-        String snapshot = batches.toString() + entries; if (!force && snapshot.equals(librarySnapshot)) return; librarySnapshot = snapshot;
+        String snapshot = batches.toString() + entries + lyricsUi.snapshot() + new TrackMetadata.Store(this).snapshot() + (playingEntry==null?"":playingEntry.id()) + player.isPlaying(); if (!force && snapshot.equals(librarySnapshot)) return; librarySnapshot = snapshot;
         results.removeAllViews();
         for (DownloadStore.Batch batch : batches) {
             if (batch.total() < 2) continue;
@@ -329,7 +365,7 @@ public final class MainActivity extends Activity {
             add(results, compactButton("検索", UiIcon.Kind.SEARCH, v -> showSearch()), 0, 0);
         }
         for (DownloadStore.Entry entry : entries) {
-            add(results, entryCard(entry), 0, 10);
+            add(results, entryCard(entry), 0, 2);
         }
         int remaining = downloads.count() - entries.size();
         if (remaining > 0) add(results, button(getString(R.string.load_more_history, remaining), false,
@@ -343,6 +379,7 @@ public final class MainActivity extends Activity {
         pitchSourceUri = uri; pitchSourceName = title; showPitch();
     }
     private void showPitch() {
+        body.setPadding(dp(20),dp(14),dp(20),dp(20));
         if (!library && !pitchMode && input != null) { query = input.getText().toString(); selectedSource = source.getSelectedItemPosition(); }
         library = false; pitchMode = true; tabs(); body.removeAllViews();
         LinearLayout heading = row(); heading.addView(text("キー変更", 25, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
@@ -419,7 +456,7 @@ public final class MainActivity extends Activity {
     }
     private void renderPitchJobs(boolean force) {
         if (!pitchMode || results == null) return;
-        List<DownloadStore.Entry> jobs = downloads.pitchRecent(); String snapshot = jobs.toString();
+        List<DownloadStore.Entry> jobs = downloads.pitchRecent(); String snapshot = jobs.toString() + lyricsUi.snapshot() + new TrackMetadata.Store(this).snapshot();
         if (!force && snapshot.equals(pitchSnapshot)) return; pitchSnapshot = snapshot; results.removeAllViews();
         if (jobs.isEmpty()) add(results, text("まだ履歴はありません", 13, MUTED, false), 0, 8);
         for (DownloadStore.Entry entry : jobs) {
@@ -428,6 +465,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (lyricsUi.result(requestCode,resultCode,data)) return;
         if (requestCode != 1067 || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         if (!"content".equalsIgnoreCase(uri.getScheme())) { toast("端末の音声ファイルを選択してください。"); return; }
@@ -442,23 +480,28 @@ public final class MainActivity extends Activity {
         selectPitch(uri.toString(), name);
     }
     private void openFile(DownloadStore.Entry entry) {
-        playAudio(entry.contentUri(), entry.title());
+        cancelListening();boolean expanded=player.isExpanded();lyricsUi.detach();
+        PlaybackCore.get(this).select(entry);syncPlayback();if(expanded)player.expand();
     }
-    private void playAudio(String uri, String name) {
-        cancelListening(); player.stop(); int token = listenGeneration;
-        player.load(Uri.parse(uri), name, false, 0, 0, () -> {
-            if (token != listenGeneration) return;
-            player.busy(name);
-            previewAudio.decode(uri, new PreviewAudio.Callback() {
-                @Override public void ready(PreviewAudio.Result result) {
-                    if (token == listenGeneration) player.load(Uri.fromFile(result.file()), name, false, 0, result.durationMs(), () -> listenFailed(token, "この音源を再生できません。"));
-                }
-                @Override public void failed(Exception error) { listenFailed(token, DownloadService.error(error)); }
-            });
-        });
+    private void syncPlayback(){
+        if(player==null||lyricsUi==null)return;
+        DownloadStore.Entry current=PlaybackCore.get(this).entry;
+        if(!java.util.Objects.equals(current,playingEntry)){playingEntry=current;if(current==null)lyricsUi.detach();else lyricsUi.attach(current);}
+    }
+    private void refreshTransport(){PlaybackCore core=PlaybackCore.get(this);player.queueControls(core.canMove(-1),core.canMove(1));}
+    private void movePlayback(int direction){PlaybackCore.get(this).move(direction);syncPlayback();}
+    private void sharePlaying(){
+        if(playingEntry==null)return;Uri uri=Uri.parse(playingEntry.contentUri());
+        Intent share=new Intent(Intent.ACTION_SEND).setType("audio/*").putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        share.setClipData(android.content.ClipData.newRawUri("音源",uri));try{startActivity(Intent.createChooser(share,"音源を共有"));}catch(RuntimeException e){toast("音源を共有できませんでした");}
+    }
+    private void playAudio(String uri,String name){
+        playingEntry=null;lyricsUi.detach();cancelListening();player.load(Uri.parse(uri),name,false,0,0,()->{});
     }
     private void cancelListening() { ++listenGeneration; previewWanted = false; handler.removeCallbacks(previewChange); previewAudio.cancel(); }
     private void requestPreview(int startMs) {
+        playingEntry=null;player.queueControls(false,false);
+        lyricsUi.detach();
         if (pitchSourceUri.isEmpty()) return;
         cancelListening(); previewWanted = true; previewPosition = Math.max(0, startMs); int token = listenGeneration;
         String name = String.format(java.util.Locale.ROOT, "試聴 · %+d · %s", pitchSemitones, pitchSourceName);
@@ -527,12 +570,15 @@ public final class MainActivity extends Activity {
             downloads.prefs.edit().putBoolean("wifi", !item.isChecked()).apply(); return true;
         });
         menu.getMenu().add("yt-dlpを更新").setOnMenuItemClickListener(item -> { updateEngine(); return true; });
+        menu.getMenu().add("歌詞の詳細設定").setOnMenuItemClickListener(item -> { lyricsUi.modelDialog(); return true; });
+        menu.getMenu().add("保存後に曲情報・画像を取得").setCheckable(true).setChecked(downloads.prefs.getBoolean("auto_metadata",true)).setOnMenuItemClickListener(item -> { downloads.prefs.edit().putBoolean("auto_metadata",!item.isChecked()).apply(); return true; });
         menu.getMenu().add("ヘルプ").setOnMenuItemClickListener(item -> { about(); return true; });
         menu.getMenu().add("ライセンス").setOnMenuItemClickListener(item -> { licenses(); return true; }); menu.show();
     }
     private void entryMenu(View anchor, DownloadStore.Entry entry) {
         PopupMenu menu = new PopupMenu(this, anchor);
         if (entry.status().equals("complete")) {
+            lyricsUi.actions(menu,entry);
             menu.getMenu().add("キー変更").setOnMenuItemClickListener(item -> { selectPitch(entry.contentUri(), entry.title()); return true; });
             menu.getMenu().add(entry.pitchJob() ? "同じ設定で保存" : "もう一度ダウンロード").setOnMenuItemClickListener(item -> { retry(entry); return true; });
         }
@@ -540,26 +586,32 @@ public final class MainActivity extends Activity {
         menu.getMenu().add("詳細").setOnMenuItemClickListener(item -> { entryDetails(entry); return true; }); menu.show();
     }
     private void entryDetails(DownloadStore.Entry entry) {
-        new AlertDialog.Builder(this).setTitle("処理の詳細").setMessage(entry.title() + "\n\n" + entry.quality() + "\n\n" + entry.message())
+        TrackMetadata m=new TrackMetadata.Store(this).find(entry.id(),entry.contentUri());
+        String info=m==null?"":"\n\n"+m.artist()+"\n"+m.album()+"\n"+m.provider()+" · "+m.imageLabel();
+        new AlertDialog.Builder(this).setTitle("音源の詳細").setMessage(entry.title() + "\n\n" + entry.quality() + "\n\n" + entry.message()+info+"\n\n"+lyricsUi.status(entry))
                 .setPositiveButton("閉じる", null).show();
     }
     private LinearLayout entryCard(DownloadStore.Entry entry) {
-        LinearLayout card = card(), line = row(), names = column();
+        LinearLayout card = column(), line = row(), names = column();card.setPadding(0,dp(5),0,dp(5));
         String title = entry.pitchJob() ? entry.title().replaceFirst(" \\[キー [^\\]]+\\]$", "") : entry.title();
-        add(names, clipped(title, 15, TEXT, true, 2), 0, 5);
-        String quality = entry.pitchJob() ? String.format(java.util.Locale.ROOT, "%+d · %s", entry.semitones(), new PitchSettings(entry.semitones(), entry.preserveFormants(), entry.outputFormat()).formatLabel())
-                : entry.formatId().isEmpty() ? "最高音質" : entry.quality();
-        add(names, clipped(quality, 12, MUTED, false, 1), 0, 5);
+        TrackMetadata metadata = new TrackMetadata.Store(this).find(entry.id(),entry.contentUri());
+        if (metadata != null && !metadata.title().isBlank()) title = metadata.title();
+        ImageView image=new ImageView(this);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setBackground(round(0xff29343c,4,0xff29343c));image.setClipToOutline(true);image.setImageDrawable(new UiIcon(UiIcon.Kind.MUSIC,MUTED));image.setContentDescription(metadata==null?"ジャケット未取得":metadata.imageLabel()+" · "+metadata.album());
+        LinearLayout.LayoutParams cover=new LinearLayout.LayoutParams(dp(56),dp(56));cover.setMargins(0,0,dp(12),0);line.addView(image,cover);if(metadata!=null&&!metadata.artwork().isBlank())ArtworkLoader.load(image,metadata.artwork());
+        boolean current=playingEntry!=null&&playingEntry.id().equals(entry.id())&&player.view.getVisibility()==View.VISIBLE;
+        add(names, clipped(title, 16, current?MINT:TEXT, false, 1), 0, 4);
+        String artist=metadata==null||metadata.artist().isBlank()?entry.pitchJob()?"キー変更した音源":"保存した音源":metadata.artist();
+        if(entry.pitchJob())artist+=" · キー "+(entry.semitones()>0?"+":"")+entry.semitones();
+        add(names,clipped(artist,12,MUTED,false,1),0,0);
         String state = switch (entry.status()) { case "complete" -> "保存済み"; case "queued" -> "待機中"; case "running", "publishing" -> "処理中 " + entry.progress() + "%"; case "cancelled" -> "中止"; default -> "失敗"; };
-        add(names, text(state, 12, entry.status().equals("failed") ? Color.rgb(249, 178, 143) : MINT, false), 0, 0);
+        if(!entry.status().equals("complete"))add(names,clipped(state,11,entry.status().equals("failed")?0xfff6ae91:MUTED,false,1),3,0);
         line.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
         if (entry.active()) line.addView(iconButton(UiIcon.Kind.CLOSE, "処理を中止", v -> {
             DownloadService.cancel(this, entry.id()); if (pitchMode) renderPitchJobs(true); else renderDownloads(true);
         }));
-        else if (entry.status().equals("complete")) line.addView(iconButton(UiIcon.Kind.PLAY, "アプリ内で再生", v -> openFile(entry)));
+        else if (entry.status().equals("complete")) {names.setOnClickListener(v->openFile(entry));image.setOnClickListener(v->openFile(entry));card.setOnClickListener(v->openFile(entry));card.setContentDescription(title+" · "+artist+" · アプリ内で再生");card.setOnLongClickListener(v->{entryMenu(v,entry);return true;});}
         else line.addView(iconButton(UiIcon.Kind.RETRY, "再試行", v -> retry(entry)));
-        if (entry.status().equals("failed")) line.addView(iconButton(UiIcon.Kind.INFO, "エラーの詳細", v -> entryDetails(entry)));
-        else line.addView(iconButton(UiIcon.Kind.MORE, "音源の操作", v -> entryMenu(v, entry)));
+        line.addView(iconButton(UiIcon.Kind.MORE, "音源の操作", v -> entryMenu(v, entry)));
         card.addView(line);
         if (entry.active()) {
             ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -569,9 +621,9 @@ public final class MainActivity extends Activity {
     }
     private void tabs() { tintNav(searchTab, !library && !pitchMode); tintNav(libraryTab, library); tintNav(pitchTab, pitchMode); }
     private void tintNav(LinearLayout item, boolean active) {
-        int color = active ? MINT : MUTED;
+        int color = active ? TEXT : MUTED;
         ((ImageView) item.getChildAt(0)).getDrawable().setTint(color);
-        ((TextView) item.getChildAt(1)).setTextColor(color); item.setBackground(round(active ? CARD : BG, 16, active ? CARD : BG)); item.setSelected(active);
+        ((TextView) item.getChildAt(1)).setTextColor(color); item.setBackgroundColor(BG); item.setSelected(active);
     }
     private LinearLayout navItem(UiIcon.Kind kind, String label, String description, View.OnClickListener click) {
         LinearLayout nav = column(); nav.setGravity(Gravity.CENTER); nav.setPadding(dp(6), dp(8), dp(6), dp(8)); nav.setMinimumHeight(dp(64));
@@ -617,6 +669,10 @@ public final class MainActivity extends Activity {
     private int dp(int n) { return Math.round(n * getResources().getDisplayMetrics().density); }
     @Override protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out); out.putBoolean("library", library); out.putInt("source", source.getSelectedItemPosition());
+        lyricsUi.save(out);
+        out.putString("player_id",playingEntry==null?"":playingEntry.id());out.putInt("player_position",player.position());
+        out.putBoolean("player_expanded",player.isExpanded());out.putBoolean("player_lyrics_expanded",player.lyricsExpanded());
+        out.putBoolean("player_shuffle",player.shuffleEnabled());out.putInt("player_repeat",player.repeatMode());
         out.putString("query", input != null ? input.getText().toString() : query);
         out.putBoolean("pitch_mode", pitchMode); out.putString("pitch_uri", pitchSourceUri); out.putString("pitch_name", pitchSourceName);
         out.putInt("pitch_key", pitchSemitones); out.putBoolean("pitch_formants", pitchFormants); out.putString("pitch_output", pitchOutput);
@@ -624,14 +680,15 @@ public final class MainActivity extends Activity {
     @Override public Object onRetainNonConfigurationInstance() {
         return new LookupState(new ArrayList<>(items), new LinkedHashSet<>(selected), collectionTitle, searched);
     }
-    @Override protected void onResume() { super.onResume(); handler.post(refresh); }
+    @Override protected void onResume() { super.onResume(); syncPlayback(); handler.post(refresh); }
     @Override protected void onPause() {
         super.onPause(); handler.removeCallbacks(refresh);
-        pauseListening();
+        if(player!=null&&player.isPreview())pauseListening();
     }
     @Override protected void onDestroy() {
         ++generation; if (request != null) request.cancel(true); YtDlpEngine.cancel(processId);
         worker.shutdownNow(); handler.removeCallbacksAndMessages(null);
+        if (lyricsUi != null) lyricsUi.close();
         if (player != null) player.close(); if (previewAudio != null) previewAudio.close(); super.onDestroy();
     }
 }

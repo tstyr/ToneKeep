@@ -2,7 +2,10 @@
 set -uo pipefail
 adb shell wm size 1080x1920
 adb shell wm density 480
-if bash ./gradlew :app:connectedDebugAndroidTest --no-daemon --max-workers=2; then
+adb shell cmd connectivity airplane-mode enable
+adb shell svc wifi disable
+adb shell svc data disable
+if bash ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.requireOffline=true --no-daemon --max-workers=2; then
   device_result=0
 else
   device_result=$?

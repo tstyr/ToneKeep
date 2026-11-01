@@ -77,6 +77,7 @@ final class YtDlpEngine {
         return base(MediaInfo.webUrl(url)).addOption("-f", formatId.isEmpty() ? "bestaudio/best" : formatId)
                 .addOption("--extract-audio").addOption("--audio-format", "best")
                 .addOption("--no-mtime").addOption("--no-overwrites")
+                .addOption("--write-info-json")
                 .addOption("--match-filters", "!is_live")
                 .addOption("-o", new File(directory, "audio.%(ext)s").getAbsolutePath());
     }

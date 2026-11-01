@@ -9,7 +9,8 @@ import android.graphics.drawable.Drawable;
 
 /** Small vector icons, with consistent strokes at any screen density. */
 final class UiIcon extends Drawable {
-    enum Kind { SEARCH, LIBRARY, KEY, DOWNLOAD, FOLDER, LIST, MORE, CLOSE, PLAY, PAUSE, RETRY, INFO, LINK, MINUS, PLUS, CHECK, MUSIC }
+    enum Kind { SEARCH, LIBRARY, KEY, DOWNLOAD, FOLDER, LIST, MORE, CLOSE, PLAY, PAUSE, RETRY, INFO, LINK, MINUS, PLUS, CHECK, MUSIC,
+        DOWN, EXPAND, PREVIOUS, NEXT, SHUFFLE, REPEAT, REPEAT_ONE, SHARE, PLAY_SOLID, PAUSE_SOLID }
     private final Kind kind;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     UiIcon(Kind kind, int color) { this.kind = kind; paint.setColor(color); paint.setStrokeWidth(1.8f); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND); paint.setStyle(Paint.Style.STROKE); }
@@ -34,6 +35,14 @@ final class UiIcon extends Drawable {
             case PLUS -> { line(canvas, 5, 12, 19, 12); line(canvas, 12, 5, 12, 19); }
             case CHECK -> path(canvas, 4, 12, 9, 17, 20, 6);
             case MUSIC -> { path(canvas, 10, 17, 10, 5, 20, 3, 20, 15); canvas.drawOval(4, 15, 10, 20, paint); canvas.drawOval(14, 13, 20, 18, paint); }
+            case DOWN -> path(canvas,5,9,12,16,19,9);
+            case EXPAND -> { path(canvas,14,4,20,4,20,10);line(canvas,20,4,13,11);path(canvas,4,14,4,20,10,20);line(canvas,4,20,11,13); }
+            case PREVIOUS, NEXT -> { boolean next=kind==Kind.NEXT;int s=canvas.save();if(!next){canvas.translate(24,0);canvas.scale(-1,1);}paint.setStyle(Paint.Style.FILL);Path p=new Path();p.moveTo(5,5);p.lineTo(16,12);p.lineTo(5,19);p.close();canvas.drawPath(p,paint);canvas.drawRoundRect(18,5,20,19,.5f,.5f,paint);paint.setStyle(Paint.Style.STROKE);canvas.restoreToCount(s); }
+            case SHUFFLE -> { path(canvas,3,6,6,6,17,18,21,18);path(canvas,17,14,21,18,17,22);path(canvas,3,18,6,18,10,14);path(canvas,14,10,17,6,21,6);path(canvas,17,2,21,6,17,10); }
+            case REPEAT, REPEAT_ONE -> { path(canvas,4,10,4,6,20,6);path(canvas,17,3,20,6,17,9);path(canvas,20,14,20,18,4,18);path(canvas,7,15,4,18,7,21);if(kind==Kind.REPEAT_ONE){line(canvas,11,11,12,10);line(canvas,12,10,12,14);} }
+            case SHARE -> { canvas.drawCircle(6,12,2,paint);canvas.drawCircle(18,5,2,paint);canvas.drawCircle(18,19,2,paint);line(canvas,8,11,16,6);line(canvas,8,13,16,18); }
+            case PLAY_SOLID -> { paint.setStyle(Paint.Style.FILL);Path p=new Path();p.moveTo(8,4);p.lineTo(21,12);p.lineTo(8,20);p.close();canvas.drawPath(p,paint);paint.setStyle(Paint.Style.STROKE); }
+            case PAUSE_SOLID -> { paint.setStyle(Paint.Style.FILL);canvas.drawRoundRect(6,5,10,19,.6f,.6f,paint);canvas.drawRoundRect(14,5,18,19,.6f,.6f,paint);paint.setStyle(Paint.Style.STROKE); }
         }
         canvas.restoreToCount(save);
     }

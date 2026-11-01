@@ -16,9 +16,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -30,7 +32,7 @@ jobs:
           cmdline-tools-version: '12266719'
           log-accepted-android-sdk-licenses: false
       - name: Install Android platform
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - name: Test, lint and build APK
         run: bash ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon
       - name: Install FFmpeg for integration check
@@ -65,9 +67,11 @@ jobs:
 
   android-device:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: Reserve space for Android device
         run: |
           sudo rm -rf -- /usr/share/dotnet /opt/hostedtoolcache/CodeQL
@@ -86,6 +90,10 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Fetch verified model for offline JNI smoke test (test APK only)
+        run: python3 scripts/fetch_lyrics_test_model.py
+      - name: Install native build tools for device tests
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - name: Test packaged Android audio engine and capture screens
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -93,9 +101,9 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          disk-size: 2048M
+          disk-size: 4096M
           emulator-boot-timeout: 300
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 2048 -partition-size 2048 -no-metrics
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 2048 -partition-size 4096 -no-metrics
           script: bash .ci/android_device.sh
       - name: Upload Android evidence
         if: always()
@@ -144,6 +152,7 @@ jobs:
           Spotify音源の直接保存・Spotifyプレイリストの取り込みは非対応です。
           yt-dlp・FFmpeg・QuickJSを同梱しているためAPKの容量が大きくなっています。
           このAPKは公開テスト鍵で署名した検証版です。
+          AI歌詞は実験機能です。モデルは別途取得し、以後の解析は端末内で行います。歌唱の誤認識・同期ずれがあり、強制アライメントとボーカル分離は未実装です。
           NOTES
           gh release create "preview-${BUILD_NUMBER}-${BUILD_ATTEMPT}" dist/* \
             --repo "$GH_REPO" --target "$COMMIT_SHA" \

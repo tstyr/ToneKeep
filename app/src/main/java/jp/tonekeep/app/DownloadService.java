@@ -117,6 +117,7 @@ public final class DownloadService extends Service {
             requireActive(entry.id());
             store.update(entry.id(), "publishing", "ダウンロードフォルダーに保存しています…", 99, null, null);
             publish(entry, audio);
+            MetadataEnricher.afterDownload(this,entry,directory);
         } catch (Exception e) {
             store.update(entry.id(), "failed", error(e), 0, null, null);
         } finally {

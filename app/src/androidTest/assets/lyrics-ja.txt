@@ -1,0 +1,6 @@
+青い空に、小さな光。今日も一緒に、歩いて行こう。
+
+Original test text written for ToneKeep. No third-party lyrics or music.
+lyrics-ja.wav: offline Windows SpeechSynthesizer, Microsoft Haruka Desktop,
+default rate, mono 22050Hz PCM16. Generated 2026-10-31.
+This is a speech smoke fixture, not evidence of singing/J-POP recognition quality.
