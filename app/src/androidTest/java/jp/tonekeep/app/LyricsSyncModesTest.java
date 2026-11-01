@@ -25,7 +25,7 @@ public class LyricsSyncModesTest {
         f.chooseTrace();f.awaitTraceReady();f.seek(1000);f.stroke(0);assertEquals(1,f.session().recorded());f.click("閉じる・下書き保存");f.chooseTrace();f.awaitTraceReady();assertEquals(1,f.session().recorded());f.seek(3000);f.stroke(1);f.click("同期を保存");Lyrics result=f.awaitSaved("manual-trace");assertEquals(2,result.lines().size());assertEquals(1000,result.lines().get(0).startMs(),350);assertEquals(3000,result.lines().get(1).startMs(),350);assertEquals(f.reference.plainText(),result.plainText());assertTrue(result.fullyTimed());
     }}
     @Test public void wordModeSavesEveryTouchedWordWithoutInventingGaps() throws Exception {try(Fixture f=new Fixture("青い空\n小さな光")){
-        f.chooseTrace();f.awaitTraceReady();Object pane=f.pane();LinearLayout root=(LinearLayout)field(pane,"root");Spinner mode=(Spinner)((LinearLayout)root.getChildAt(2)).getChildAt(0);f.i.runOnMainSync(()->mode.setSelection(1));f.awaitTraceReady();Thread.sleep(150);LyricsTraceSession session=f.session();assertTrue(session.words);assertTrue(session.units.size()>1);assertTrue(session.units.size()<=8);
+        f.chooseTrace();f.awaitTraceReady();Object pane=f.pane();LinearLayout root=(LinearLayout)field(pane,"root");Spinner mode=(Spinner)((LinearLayout)root.getChildAt(2)).getChildAt(0);f.i.runOnMainSync(()->mode.setSelection(1));f.awaitTraceReady(true);LyricsTraceSession session=f.session();assertTrue("Word-mode session must be ready",session.words);assertTrue(session.units.size()>1);assertTrue(session.units.size()<=8);
         for(int index=0;index<session.units.size();index++){f.seek(300+index*600);f.stroke(index);}
         f.click("同期を保存");Lyrics result=f.awaitSaved("manual-trace");assertEquals(session.units.size(),result.lines().stream().mapToInt(l->l.words().size()).sum());assertEquals(f.reference.plainText(),result.plainText());assertTrue(result.export("elrc").contains("<"));
     }}
@@ -46,7 +46,21 @@ public class LyricsSyncModesTest {
         void chooseTrace() throws Exception {choose();click("指でなぞって保存（行・単語）");}
         Object pane() throws Exception{return field(sync,"pane");}
         LyricsTraceSession session() throws Exception{return (LyricsTraceSession)field(pane(),"session");}
-        void awaitTraceReady() throws Exception {long end=SystemClock.elapsedRealtime()+10000;AtomicBoolean ready=new AtomicBoolean();while(SystemClock.elapsedRealtime()<end){i.runOnMainSync(()->{try{ready.set(pane()!=null&&!((Boolean)field(pane(),"loading"))&&!player.isPreparing());}catch(Exception e){throw new AssertionError(e);}});if(ready.get())return;Thread.sleep(60);}fail("Trace editor not ready");}
+        void awaitTraceReady() throws Exception {awaitTraceReady(false);}
+        void awaitTraceReady(boolean words) throws Exception {
+            long end=SystemClock.elapsedRealtime()+10000;AtomicBoolean ready=new AtomicBoolean();
+            while(SystemClock.elapsedRealtime()<end){
+                i.runOnMainSync(()->{try{
+                    Object current=pane();if(current==null)return;
+                    LyricsTraceView view=(LyricsTraceView)field(current,"view");
+                    LinearLayout rows=(LinearLayout)view.getChildAt(0);
+                    ready.set(session().words==words&&!((Boolean)field(current,"loading"))&&!player.isPreparing()
+                            &&view.isLaidOut()&&rows.getChildCount()>0&&((TextView)rows.getChildAt(0)).getLayout()!=null);
+                }catch(Exception e){throw new AssertionError(e);}});
+                if(ready.get())return;Thread.sleep(60);
+            }
+            fail("Trace editor not ready for "+(words?"word":"line")+" mode");
+        }
         void seek(int ms) throws Exception {i.runOnMainSync(()->{player.seekTo(ms);if(!player.isPlaying())player.togglePlayback();});long end=SystemClock.elapsedRealtime()+3000;while(Math.abs(player.position()-ms)>250&&SystemClock.elapsedRealtime()<end)Thread.sleep(40);assertEquals(ms,player.position(),250);}
         void stroke(int unit) throws Exception {LyricsTraceView view=(LyricsTraceView)field(pane(),"view");LyricsTraceSession s=session();LyricsTraceSession.Unit u=s.units.get(unit);LinearLayout rows=(LinearLayout)view.getChildAt(0);TextView row=(TextView)rows.getChildAt(u.row());float[] point=new float[2];i.runOnMainSync(()->{android.text.Layout layout=row.getLayout();int line=layout.getLineForOffset(u.from());point[0]=row.getLeft()+row.getTotalPaddingLeft()+layout.getPrimaryHorizontal(u.from())+Math.max(1,(layout.getPrimaryHorizontal(Math.min(u.to(),u.from()+1))-layout.getPrimaryHorizontal(u.from()))/2);point[1]=row.getTop()+row.getTotalPaddingTop()+(layout.getLineTop(line)+layout.getLineBottom(line))/2f-view.getScrollY();});long time=SystemClock.uptimeMillis();i.runOnMainSync(()->{MotionEvent event=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,point[0],point[1],0);view.dispatchTouchEvent(event);event.recycle();assertEquals("Gesture hit: "+point[0]+","+point[1]+" player="+player.isPlaying()+" position="+player.position(),unit,s.active());});long started=s.start(unit),deadline=SystemClock.elapsedRealtime()+4000;while(player.position()<started+100&&SystemClock.elapsedRealtime()<deadline)Thread.sleep(40);i.runOnMainSync(()->{MotionEvent event=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,point[0],point[1],0);view.dispatchTouchEvent(event);event.recycle();assertTrue("Gesture end unit="+unit+" start="+s.start(unit)+" end="+s.end(unit)+" active="+s.active()+" player="+player.isPlaying()+" position="+player.position(),s.end(unit)>s.start(unit));});}
         void click(String text) throws Exception {long end=SystemClock.elapsedRealtime()+10000;while(SystemClock.elapsedRealtime()<end){AccessibilityNodeInfo root=i.getUiAutomation().getRootInActiveWindow();if(root!=null&&root.getPackageName()!=null&&app.getPackageName().contentEquals(root.getPackageName()))for(AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(text))if(node.getText()!=null&&text.contentEquals(node.getText())&&node.isEnabled()){assertTrue(node.performAction(AccessibilityNodeInfo.ACTION_CLICK));Thread.sleep(120);return;}Thread.sleep(80);}fail("Button not found: "+text);}
