@@ -60,3 +60,10 @@ Galaxy / Android 17では、通知とロック画面のジャケット・タイ�
 `main` と `feature/offline-ai-lyrics` へのpushでは、既存のビルド・単体テスト・lint・Androidエミュレーターテストの両ジョブが成功した後に `preview-<run番号>-<試行番号>` タグとプレビューReleaseを作り、`ToneKeep-preview.apk` と `SHA256SUMS.txt` を添付する。失敗した場合は公開しない。
 
 [Releases](https://github.com/tstyr/ToneKeep/releases) の該当プレビューを開き、AssetsのAPKを直接ダウンロードできる。機能ブランチでは従来の検証アプリID `jp.tonekeep.app.offlineverify` を維持する。`main` の既存配布ルールと、PRで公開しない制約は維持する。
+
+
+### 停止後の古い通知からの操作
+
+CIで短時間の停止・再開後に、SystemUIの古い通知削除処理が新しい再生へ届くケースを確認した。サービス/MediaSessionの世代ごとに通知IDと操作PendingIntentのURIを分け、古いセッションからの操作・古いサービスの破棄が現在の再生を変更しないようにした。所有権はContextを持たないトークンで判定する。PCの回帰テストでは旧セッションの停止・一時停止・削除Intentを新しい再生へ送っても再生が継続することを確認する。
+
+この追加修正後はPC単体テスト90件成功、lintエラー0・既存警告16、アプリ/AndroidテストAPKのビルド成功を確認した。

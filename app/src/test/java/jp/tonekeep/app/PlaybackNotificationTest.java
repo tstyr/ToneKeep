@@ -51,7 +51,7 @@ public class PlaybackNotificationTest {
         ShadowMediaPlayer.addMediaInfo(DataSource.toDataSource(context,Uri.parse(uri)),new ShadowMediaPlayer.MediaInfo(60000,1));return store.find(e.id());
     }
     private void idle(){Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(10));}
-    private Notification notification(){return Shadows.shadowOf(context.getSystemService(NotificationManager.class)).getNotification(PlaybackService.NOTIFICATION_ID);}
+    private Notification notification(){return Shadows.shadowOf(context.getSystemService(NotificationManager.class)).getNotification(core.notificationId);}
     @Test public void mediaCardUsesActualTitleArtistDurationAndPlaybackActions(){
         assertTrue(core.isPlaying());Notification n=notification();assertNotNull(n);assertEquals("正式な曲名",n.extras.getCharSequence(Notification.EXTRA_TITLE));assertEquals("自作アーティスト",n.extras.getCharSequence(Notification.EXTRA_TEXT));assertEquals("android.app.Notification$MediaStyle",n.extras.getString(Notification.EXTRA_TEMPLATE));
         assertEquals(first.id(),SessionShadow.metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID));assertEquals(60000,SessionShadow.metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));assertEquals(PlaybackState.STATE_PLAYING,SessionShadow.state.getState());assertTrue((SessionShadow.state.getActions()&PlaybackState.ACTION_SEEK_TO)!=0);assertTrue(SessionShadow.active);
@@ -82,6 +82,15 @@ public class PlaybackNotificationTest {
     @Test public void notificationTapOpensExistingPlayerAndPreviewCannotSeekOutsideItsClip(){
         Intent open=Shadows.shadowOf(notification().contentIntent).getSavedIntent();assertTrue(open.getBooleanExtra("playback",false));assertTrue(open.getBooleanExtra("library",false));
         core.load(Uri.parse(first.contentUri()),"試聴",true,12000,60000);service.get().onStartCommand(new Intent(),0,2);idle();assertEquals(0,SessionShadow.state.getActions()&PlaybackState.ACTION_SEEK_TO);assertEquals(0,SessionShadow.metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
+    }
+    @Test public void oldServiceAndDismissedCardCannotStopTheNewPlayback(){
+        MediaSession.Callback oldCallback=SessionShadow.callback;Intent oldDismiss=Shadows.shadowOf(notification().deleteIntent).getSavedIntent();int oldId=core.notificationId;
+        core.stop();idle();core.select(first);
+        ServiceController<PlaybackService> oldService=service;
+        service=Robolectric.buildService(PlaybackService.class).create();service.get().onStartCommand(new Intent(),0,2);idle();
+        assertNotEquals(oldId,core.notificationId);assertTrue(core.isPlaying());oldService.destroy();
+        oldCallback.onPause();oldCallback.onStop();assertTrue(core.isPlaying());assertNotNull(notification());
+        service.get().onStartCommand(oldDismiss,0,3);idle();assertTrue(core.isPlaying());assertEquals(first.id(),core.entry.id());assertNotNull(notification());
     }
     private static Object field(Object o,String name) throws Exception {Field f=o.getClass().getDeclaredField(name);f.setAccessible(true);return f.get(o);}
     private static void reset(String name,Class<?> type) throws Exception {Field f=type.getDeclaredField(name);f.setAccessible(true);f.set(null,null);}

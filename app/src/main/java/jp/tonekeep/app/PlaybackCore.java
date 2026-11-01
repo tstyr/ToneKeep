@@ -27,6 +27,8 @@ final class PlaybackCore {
     String name="",artist="",album="",artwork="",error="";
     private String source="";
     DownloadStore.Entry entry;
+    Object serviceToken;
+    int notificationId;
     private final BroadcastReceiver noisy=new BroadcastReceiver(){@Override public void onReceive(Context c,Intent i){interrupt();}};
     private PlaybackCore(Context c){
         context=(android.app.Application)c;audio=(AudioManager)c.getSystemService(Context.AUDIO_SERVICE);
