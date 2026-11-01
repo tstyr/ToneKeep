@@ -48,8 +48,15 @@ Windows PCで次のコマンドが成功した。
 
 PCテストはRobolectricのMediaPlayer/Androidビューを使用する。Robolectric標準のMediaSessionにはBinder実装がないため、この境界だけ記録用Shadowに置き換えている。通知本文、MediaStyle、メタデータ、再生状態、コールバックから実再生コードへの接続、画面の再作成/終了を確認する。実際のAndroid音声出力やSamsung SystemUIの表示確認を意味しない。
 
-Android用の追加テストは自作の短い日本語音声と自作画像を使用し、実際の通知トークンからMediaControllerを作って操作する。既存CIは全Androidテストを実行する設定のため、この追加テストも対象。今回GitHub Actionsのリモート実行や公開リリースは行っていない。
+Android用の追加テストは自作の短い日本語音声と自作画像を使用し、実際の通知トークンからMediaControllerを作って操作する。既存CIは全Androidテストを実行する設定のため、この追加テストも対象。通知機能の初回PC検証時点ではGitHub Actionsのリモート実行や公開リリースは行っていなかった。後記の自動Release経路は別途追加した。
 
 Galaxy / Android 17では、通知とロック画面のジャケット・タイトル・シークバー、通知からの操作、画面消灯/タスクを閉じた後の継続、Bluetooth/有線機器の切断、Samsungの省電力設定の影響を確認する必要がある。今回のAPKはこれらが未検証のプレビュー。
 
 実装時の確認資料: [MediaPlayerのバックグラウンド再生](https://developer.android.com/media/platform/mediaplayer/background)、[mediaPlaybackサービス](https://developer.android.com/develop/background-work/services/fgs/service-types#media)、[音声フォーカス](https://developer.android.com/media/optimize/audio-focus)。
+
+
+## GitHubからAPKを取得する
+
+`main` と `feature/offline-ai-lyrics` へのpushでは、既存のビルド・単体テスト・lint・Androidエミュレーターテストの両ジョブが成功した後に `preview-<run番号>-<試行番号>` タグとプレビューReleaseを作り、`ToneKeep-preview.apk` と `SHA256SUMS.txt` を添付する。失敗した場合は公開しない。
+
+[Releases](https://github.com/tstyr/ToneKeep/releases) の該当プレビューを開き、AssetsのAPKを直接ダウンロードできる。機能ブランチでは従来の検証アプリID `jp.tonekeep.app.offlineverify` を維持する。`main` の既存配布ルールと、PRで公開しない制約は維持する。

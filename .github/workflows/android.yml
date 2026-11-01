@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/offline-ai-lyrics]
   pull_request:
   workflow_dispatch:
 
@@ -33,6 +33,9 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - name: Install Android platform
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - name: Keep the offline preview application ID
+        if: github.ref == 'refs/heads/feature/offline-ai-lyrics'
+        run: echo 'ORG_GRADLE_PROJECT_offlineVerification=true' >> "$GITHUB_ENV"
       - name: Test, lint and build APK
         run: bash ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-daemon
       - name: Install FFmpeg for integration check
@@ -90,6 +93,9 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Keep the offline preview application ID
+        if: github.ref == 'refs/heads/feature/offline-ai-lyrics'
+        run: echo 'ORG_GRADLE_PROJECT_offlineVerification=true' >> "$GITHUB_ENV"
       - name: Fetch verified model for offline JNI smoke test (test APK only)
         run: python3 scripts/fetch_lyrics_test_model.py
       - name: Install native build tools for device tests
@@ -116,7 +122,7 @@ jobs:
             app/build/outputs/androidTest-results/
 
   publish:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/offline-ai-lyrics')
     needs: [build, android-device]
     runs-on: ubuntu-latest
     permissions:
@@ -152,6 +158,9 @@ jobs:
           Spotify音源の直接保存・Spotifyプレイリストの取り込みは非対応です。
           yt-dlp・FFmpeg・QuickJSを同梱しているためAPKの容量が大きくなっています。
           このAPKは公開テスト鍵で署名した検証版です。
+          歌詞の取得・行/単語のなぞり同期・端末内AI照合、再生通知とバックグラウンド再生を追加しています。
+          Galaxy / Android 17での通知の外観、画面消灯中の再生と省電力設定の影響は未検証です。
+          feature/offline-ai-lyrics版のアプリIDは jp.tonekeep.app.offlineverify です。
           AI歌詞は実験機能です。モデルは別途取得し、以後の解析は端末内で行います。歌唱の誤認識・同期ずれがあり、強制アライメントとボーカル分離は未実装です。
           NOTES
           gh release create "preview-${BUILD_NUMBER}-${BUILD_ATTEMPT}" dist/* \
