@@ -6,7 +6,7 @@
 
 - LRCLIBの検索とID取得がHTTP 503を返した。応答は `ServerOverloaded`、`Retry-After: 1`。曲名やAPIキーの不足を示す応答ではない。
 - MusicBrainzとCover Art Archiveは応答した。修正後の実アプリコードをPCのRobolectric環境から実行し、曲情報・アルバム・画像取得、JPEG保存、SQLiteへの反映まで成功。画像は100,834 bytes、処理約9.5秒。
-- 同じ実アプリコードでのLRCLIB取得は、短い待機を挟む最大3回の試行後も503。約5.9秒で取得先名とHTTP番号を持つエラーとして終了した。実サービスからの歌詞取得成功は、この検証では確認できていない。
+- 同じ実アプリコードでのLRCLIB取得は、短い待機を挟む最大3回の試行後も503。約5.9秒で取得先名とHTTP番号を持つエラーとして終了した。初回プローブでは実サービスからの歌詞取得成功を確認できなかった。後記の再確認結果と区別する。
 - これはPCの接続確認であり、ユーザー端末の通信エラーが同一原因であると断定するものではない。端末のエラー文・DNS・TLS経路の確認は別途必要。
 
 ## アプリ側の修正
@@ -38,3 +38,17 @@ LRCLIBの503と待機ポリシーは[公式API資料](https://lrclib.net/docs#er
 ## ローカル検証結果
 
 通常のGradle検証は単体テスト103件成功（失敗/スキップ0）、lintエラー0・既存警告16、アプリAPKとAndroidテストAPKの生成成功。外部接続プローブのLRCLIB失敗は通常テストへ含めず、上記の取得先不調として別に記録した。Galaxy実機でのネット接続確認は未実施。
+
+
+## 再確認と配布結果
+
+その後の再確認では、同じ修正版の`LyricsLookup` / `MetadataHttp`を実行し、LRCLIBから歌詞本文を持つ候補3件を取得できた（HTTP 200、約0.5秒）。初回の503と再確認の200を確認したため、サービスの可用性には変動がある。端末での取得成功を保証するものではない。
+
+[GitHub Actions #14](https://github.com/tstyr/ToneKeep/actions/runs/41408511754)ではビルド・単体テスト・lint・音声処理チェックとAndroidエミュレーター検証が成功した。Androidは22件中16件成功、オンライン/実曲/標準smallモデルの任意テスト6件を条件によりskip。
+
+修正版は[preview-14-1](https://github.com/tstyr/ToneKeep/releases/tag/preview-14-1)に公開。アプリコードのコミットは`08cdd8288b60eaf89ad972da478b3c751143c2cd`、アプリIDは従来の`jp.tonekeep.app.offlineverify`。
+
+- APK: `ToneKeep-preview.apk`、161,290,238 bytes。
+- SHA-256: `89a1d61e4fd06b294a98107ca3e583c4fae4516de3bb4111465899a9573f91e2`。
+- GitHubの公開asset digestと添付チェックサムが一致し、ダウンロード先からAPKのZIPヘッダーを取得できたことを確認。
+- Galaxy / Android 17の実際のネット接続は未検証。
