@@ -92,6 +92,12 @@ public class PlaybackNotificationTest {
         oldCallback.onPause();oldCallback.onStop();assertTrue(core.isPlaying());assertNotNull(notification());
         service.get().onStartCommand(oldDismiss,0,3);idle();assertTrue(core.isPlaying());assertEquals(first.id(),core.entry.id());assertNotNull(notification());
     }
+    @Test public void fetchedAlbumUpdatesTheCurrentPlayerAndMediaCardWithoutRestartingAudio() throws Exception {
+        var activity=Robolectric.buildActivity(MainActivity.class).setup();core.pause();core.seek(14000);idle();
+        new TrackMetadata.Store(context).save(new TrackMetadata(first.id(),first.contentUri(),"更新した曲名","自作アーティスト","取得したアルバム",60000,"self","","","","保存済み"));
+        var refresh=MainActivity.class.getDeclaredMethod("syncPlayback");refresh.setAccessible(true);refresh.invoke(activity.get());
+        assertEquals("更新した曲名",core.name);assertEquals("取得したアルバム",SessionShadow.metadata.getString(MediaMetadata.METADATA_KEY_ALBUM));assertEquals(14000,core.position());assertFalse(core.isPlaying());assertEquals(first.id(),core.entry.id());activity.close();
+    }
     private static Object field(Object o,String name) throws Exception {Field f=o.getClass().getDeclaredField(name);f.setAccessible(true);return f.get(o);}
     private static void reset(String name,Class<?> type) throws Exception {Field f=type.getDeclaredField(name);f.setAccessible(true);f.set(null,null);}
     private void resetDb() throws Exception {Field f=DownloadStore.class.getDeclaredField("instance");f.setAccessible(true);SQLiteOpenHelper db=(SQLiteOpenHelper)f.get(null);if(db!=null)db.close();f.set(null,null);context.deleteDatabase("downloads.db");}

@@ -17,15 +17,16 @@ final class MetadataEnricher {
         }
         try {
             File info=new File(staging,"audio.info.json");JSONObject source=info.isFile()&&info.length()<=4*1024*1024 ? new JSONObject(new String(Files.readAllBytes(info.toPath()),StandardCharsets.UTF_8)) : new JSONObject();
-            String title=source.optString("track");if(title.isBlank())title=entry.title();String artist=source.optString("artist"),album=source.optString("album");long duration=(long)(source.optDouble("duration",0)*1000);
+            String title=text(source,"track");if(title.isBlank())title=entry.title();String artist=text(source,"artist"),album=text(source,"album");long duration=(long)(source.optDouble("duration",0)*1000);
             TrackMetadata base=new TrackMetadata(entry.id(),entry.contentUri(),title,artist,album,duration,"配信元","", "","","配信元の曲情報");store.save(base);
             if(!downloads.prefs.getBoolean("auto_metadata",true) || (entry.wifiOnly()&&!DownloadService.onWifi(context)))return;
             if(!artist.isBlank()) {
                 try { List<MusicCatalog.Match> candidates=MusicCatalog.search(context,title,artist);List<MusicCatalog.Match> exact=candidates.stream().filter(m->m.exact(base.title(),base.artist(),base.duration())).collect(java.util.stream.Collectors.toList());if(exact.size()==1){MusicCatalog.apply(context,entry,exact.get(0));return;} } catch(Exception ignored){ }
             }
-            String thumbnail=source.optString("thumbnail");String art="";
+            String thumbnail=text(source,"thumbnail");String art="";
             if(!thumbnail.isBlank())try{art=MusicCatalog.artwork(context,thumbnail);}catch(Exception ignored){ }
             store.save(new TrackMetadata(entry.id(),entry.contentUri(),title,artist,album,duration,"配信元","",art,art.isBlank()?"":"配信元画像（アルバム画像は未確認）","曲情報を検索・確認できます"));
         } catch(Exception ignored) { /* The original completed download and source remain intact. */ }
     }
+    private static String text(JSONObject json,String key){Object value=json.opt(key);return value instanceof String?((String)value).trim():"";}
 }

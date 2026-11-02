@@ -39,12 +39,13 @@ final class LyricsSourcesUi implements AutoCloseable {
             job("歌詞を保存中",()->{SongDetails song=SongDetails.read(activity,entry);Lyrics doc=LrcParser.plain(body,song.duration(),song.hash(),new Lyrics.Origin("user","自分で入力した歌詞",""));store.saveExternal(entry.id(),entry.contentUri(),doc);return doc;},doc->{changed.accept(entry);dialog.dismiss();toast("歌詞を保存しました");});}));dialog.show();
     }
     private void chooseSync(DownloadStore.Entry entry){job("保存した歌詞を読み込み中",()->store.load(entry.id(),entry.contentUri()),doc->{if(doc==null){toast("先に歌詞を取得・読み込みしてください");return;}sync.choose(entry,doc);});}
-    private void prepare(DownloadStore.Entry entry,boolean metadata){job("音源の情報を確認中",()->SongDetails.read(activity,entry),song->{
+    private void prepare(DownloadStore.Entry entry,boolean metadata){job("曲名を確認中",()->SongDetails.inspect(activity,entry),song->{
         LinearLayout box=column();EditText title=input(song.title(),"曲名"),artist=input(song.artist(),"アーティスト");box.addView(title);box.addView(artist);
         TextView note=new TextView(activity);note.setText((metadata?"MusicBrainz / Cover Art Archive":"LRCLIB")+"へ曲名・アーティスト名を送信します。音源は送信しません。\n候補を確認して選択し、取得後は端末に保存します。");box.addView(note);
         new AlertDialog.Builder(activity).setTitle(metadata?"曲情報を検索":"既存の歌詞を探す").setView(box).setNegativeButton("戻る",null).setPositiveButton("検索",(d,w)->{
-            if(metadata)job("曲情報を検索中",()->MusicCatalog.search(activity,title.getText().toString(),artist.getText().toString()),matches->catalogChoices(entry,song,matches));
-            else job("歌詞を検索中",()->LyricsLookup.search(activity,title.getText().toString(),artist.getText().toString(),song.duration()),matches->lyricsChoices(entry,song,matches));
+            String queryTitle=title.getText().toString().trim(),queryArtist=artist.getText().toString().trim();
+            if(metadata)job("MusicBrainzで曲情報を検索中",()->MusicCatalog.search(activity,queryTitle,queryArtist),matches->catalogChoices(entry,song,matches));
+            else job("LRCLIBで歌詞を検索中",()->LyricsLookup.search(activity,queryTitle,queryArtist,song.duration()),matches->lyricsChoices(entry,song,matches));
         }).show();
     });}
     private void lyricsChoices(DownloadStore.Entry entry,SongDetails song,List<LyricsLookup.Candidate> matches){
@@ -53,16 +54,21 @@ final class LyricsSourcesUi implements AutoCloseable {
         new AlertDialog.Builder(activity).setTitle("歌詞の候補").setItems(labels,(d,i)->{
             LyricsLookup.Candidate candidate=matches.get(i);if(!candidate.matchesDuration(song.duration())){toast("曲長が異なるため保存しません。同じバージョンを選んでください。");return;}
             String body=candidate.synced().isBlank()?candidate.plain():candidate.synced();TextView preview=new TextView(activity);preview.setText(body);preview.setPadding(24,12,24,12);ScrollView scroll=new ScrollView(activity);scroll.addView(preview);
-            new AlertDialog.Builder(activity).setTitle(candidate.synced().isBlank()?"時刻なしの歌詞 · LRCLIB":"同期歌詞 · LRCLIB").setView(scroll).setNegativeButton("戻る",null).setPositiveButton("端末に保存",(p,w)->job("歌詞を保存中",()->{Lyrics doc=candidate.document(song.duration(),song.hash());store.saveExternal(entry.id(),entry.contentUri(),doc);return doc;},doc->{changed.accept(entry);toast(doc.lines().isEmpty()?"歌詞を保存しました。必要なら端末内で行時刻を付けられます。":"同期歌詞を保存しました");})).show();
+            new AlertDialog.Builder(activity).setTitle(candidate.synced().isBlank()?"時刻なしの歌詞 · LRCLIB":"同期歌詞 · LRCLIB").setView(scroll).setNegativeButton("戻る",null).setPositiveButton("端末に保存",(p,w)->job("歌詞を保存中",()->{SongDetails current=SongDetails.read(activity,entry);Lyrics doc=candidate.document(current.duration(),current.hash());store.saveExternal(entry.id(),entry.contentUri(),doc);return doc;},doc->{changed.accept(entry);toast(doc.lines().isEmpty()?"歌詞を保存しました。必要なら端末内で行時刻を付けられます。":"同期歌詞を保存しました");})).show();
         }).setNegativeButton("閉じる",null).show();
     }
     private void catalogChoices(DownloadStore.Entry entry,SongDetails song,List<MusicCatalog.Match> matches){
         if(matches.isEmpty()){toast("曲情報が見つかりませんでした");return;}
         new AlertDialog.Builder(activity).setTitle("曲情報の候補").setItems(matches.stream().map(MusicCatalog.Match::description).toArray(String[]::new),(d,i)->{
             MusicCatalog.Match match=matches.get(i);String mismatch=match.duration()>0&&Math.abs(match.duration()-song.duration())>3000?"\n音源と曲長が異なります。ライブ版・別編集版でないか確認してください。":"";
-            new AlertDialog.Builder(activity).setTitle("曲情報を確認").setMessage(match.description()+mismatch+"\n元の音源ファイル名と音声は変更しません。").setNegativeButton("戻る",null).setPositiveButton("この情報を使う",(p,w)->job("曲情報と画像を取得中",()->MusicCatalog.apply(activity,entry,match),result->{changed.accept(entry);toast(result.status());})).show();
+            new AlertDialog.Builder(activity).setTitle("曲情報を確認").setMessage(match.description()+mismatch+"\n元の音源ファイル名と音声は変更しません。").setNegativeButton("戻る",null).setPositiveButton("この情報を使う",(p,w)->applyCatalog(entry,match)).show();
         }).setNegativeButton("閉じる",null).show();
     }
+    private void applyCatalog(DownloadStore.Entry entry,MusicCatalog.Match match){job("曲情報を保存・画像を取得中",()->MusicCatalog.apply(activity,entry,match),result->{
+        changed.accept(entry);
+        if(result.artwork().isBlank()&&!match.release().isBlank())new AlertDialog.Builder(activity).setTitle("曲情報は保存しました").setMessage(result.status()).setNegativeButton("閉じる",null).setPositiveButton("画像を再取得",(d,w)->applyCatalog(entry,match)).show();
+        else toast(result.status());
+    });}
     private void importFile(DownloadStore.Entry entry){
         importId=entry.id();importUri=entry.contentUri();
         Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"text/*","application/octet-stream","application/x-lrc"});

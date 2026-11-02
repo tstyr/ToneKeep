@@ -27,6 +27,7 @@ final class PlaybackCore {
     String name="",artist="",album="",artwork="",error="";
     private String source="";
     DownloadStore.Entry entry;
+    TrackMetadata metadata;
     Object serviceToken;
     int notificationId;
     private final BroadcastReceiver noisy=new BroadcastReceiver(){@Override public void onReceive(Context c,Intent i){interrupt();}};
@@ -49,7 +50,7 @@ final class PlaybackCore {
     }
     private void playEntry(DownloadStore.Entry e){load(Uri.parse(e.contentUri()),e.title(),false,0,0);track(e,new TrackMetadata.Store(context).find(e.id(),e.contentUri()));}
     void track(DownloadStore.Entry e,TrackMetadata m){
-        entry=e;name=m!=null&&!m.title().isBlank()?m.title():e.title();
+        entry=e;metadata=m;name=m!=null&&!m.title().isBlank()?m.title():e.title();
         if(e.pitchJob()&&m!=null)name+=" [キー "+(e.semitones()>0?"+":"")+e.semitones()+"]";
         artist=m==null||m.artist().isBlank()?"端末に保存した音源":m.artist();album=m==null?"":m.album();artwork=m==null?"":m.artwork();changed();
     }
@@ -109,6 +110,6 @@ final class PlaybackCore {
     private void clear(boolean notify){
         ++generation;releaseMedia();if(decoder!=null){decoder.close();decoder=null;}
         if(registered){context.unregisterReceiver(noisy);registered=false;}
-        active=false;preparing=false;wantsPlay=false;completed=false;pending=-1;entry=null;offset=0;total=0;source="";name="";artist="";album="";artwork="";error="";if(notify)changed();
+        active=false;preparing=false;wantsPlay=false;completed=false;pending=-1;entry=null;metadata=null;offset=0;total=0;source="";name="";artist="";album="";artwork="";error="";if(notify)changed();
     }
 }

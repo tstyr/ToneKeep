@@ -485,7 +485,8 @@ public final class MainActivity extends Activity {
     }
     private void syncPlayback(){
         if(player==null||lyricsUi==null)return;
-        DownloadStore.Entry current=PlaybackCore.get(this).entry;
+        PlaybackCore playback=PlaybackCore.get(this);DownloadStore.Entry current=playback.entry;
+        if(current!=null){TrackMetadata latest=new TrackMetadata.Store(this).find(current.id(),current.contentUri());if(!java.util.Objects.equals(latest,playback.metadata))playback.track(current,latest);}
         if(!java.util.Objects.equals(current,playingEntry)){playingEntry=current;if(current==null)lyricsUi.detach();else lyricsUi.attach(current);}
     }
     private void refreshTransport(){PlaybackCore core=PlaybackCore.get(this);player.queueControls(core.canMove(-1),core.canMove(1));}

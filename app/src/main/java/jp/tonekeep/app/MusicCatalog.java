@@ -31,14 +31,20 @@ final class MusicCatalog {
         }
         return results;
     }
+    interface Artwork {String load(Context context,String url) throws Exception;}
     static TrackMetadata apply(Context context,DownloadStore.Entry entry,Match match) {
+        return apply(context,entry,match,MusicCatalog::artwork);
+    }
+    static TrackMetadata apply(Context context,DownloadStore.Entry entry,Match match,Artwork loader) {
         TrackMetadata.Store store=new TrackMetadata.Store(context);TrackMetadata old=store.find(entry.id(),entry.contentUri());String art="",image="",status="曲情報を保存しました";
         if(old!=null && old.album().equals(match.album)) { art=old.artwork();image=old.imageLabel(); }
+        // A slow or unavailable cover must not delay saving the selected title/artist/album.
+        store.save(new TrackMetadata(entry.id(),entry.contentUri(),match.title,match.artist,match.album,match.duration,"MusicBrainz","https://musicbrainz.org/recording/"+match.id,art,image,"曲情報取得済み · 画像を確認中"));
         if(!match.release.isBlank())try {
             String front="https://coverartarchive.org/release/"+match.release+"/front-";
-            try{art=artwork(context,front+"1200");}catch(Exception unavailable){if(Thread.currentThread().isInterrupted())throw unavailable;art=artwork(context,front+"500");}
+            try{art=loader.load(context,front+"1200");}catch(MetadataHttp.HttpFailure unavailable){if(unavailable.status!=404&&unavailable.status!=413)throw unavailable;art=loader.load(context,front+"500");}catch(MetadataHttp.ResponseTooLarge tooLarge){art=loader.load(context,front+"500");}
             image="Cover Art Archive";
-        } catch(Exception e){status=art.isBlank()?"曲情報取得済み · アルバム画像は未取得":"曲情報取得済み · 保存済みの画像を利用";}
+        } catch(Exception e){status=(art.isBlank()?"曲情報取得済み · 画像は未取得":"曲情報取得済み · 保存済みの画像を利用")+(e.getMessage()==null?"":"\n"+e.getMessage());}
         TrackMetadata m=new TrackMetadata(entry.id(),entry.contentUri(),match.title,match.artist,match.album,match.duration,"MusicBrainz","https://musicbrainz.org/recording/"+match.id,art,image,status);store.save(m);return m;
     }
     static String artwork(Context context,String url) throws Exception {
