@@ -20,9 +20,10 @@ final class DownloadStore {
     private static volatile Database instance;
     final SharedPreferences prefs;
     private final SQLiteDatabase db;
+    private final Database database;
     record Entry(String id, String title, String url, String formatId, String quality, String status,
                  String message, int progress, String contentUri, String filename, boolean wifiOnly,
-                 String kind, int semitones, boolean preserveFormants, String outputFormat, String vocalQuality) {
+                 String kind, int semitones, boolean preserveFormants, String outputFormat, String vocalQuality, String artist) {
         boolean active() { return status.equals("queued") || status.equals("running") || status.equals("publishing"); }
         boolean pitchJob() { return kind.equals("pitch"); }
         boolean vocalJob() { return kind.equals("vocals"); }
@@ -37,7 +38,7 @@ final class DownloadStore {
         prefs = app.getSharedPreferences("tonekeep", Context.MODE_PRIVATE);
         synchronized (DownloadStore.class) {
             if (instance == null) instance = new Database(app);
-            db = instance.getWritableDatabase();
+            database = instance; db = database.getWritableDatabase();
         }
     }
     List<Entry> all() { return select(null, null, "seq DESC", null); }
@@ -52,6 +53,14 @@ final class DownloadStore {
         return rows.isEmpty() ? null : rows.get(0);
     }
     boolean active() { return count(ACTIVE, null) > 0; }
+    boolean isActive(String id) {
+        try (Cursor cursor = db.query("jobs", new String[]{"id"}, "id=? AND " + ACTIVE, new String[]{id}, null, null, null, "1")) {
+            return cursor.moveToFirst();
+        }
+    }
+    long revision() { return database.revision.get(); }
+    private void changed(int rows) { if (rows > 0) database.revision.incrementAndGet(); }
+    private void endChange() { db.endTransaction(); database.revision.incrementAndGet(); }
     int count() { return count(null, null); }
     int pending() { return count("status='queued'", null); }
     private int count(String where, String[] args) {
@@ -69,7 +78,7 @@ final class DownloadStore {
             db.insertOrThrow("jobs", null, values(entry, batch, track.title()));
             db.setTransactionSuccessful();
             return entry;
-        } finally { db.endTransaction(); }
+        } finally { endChange(); }
     }
     Added enqueueBatch(List<MediaInfo.Track> tracks, String title) {
         String batch = UUID.randomUUID().toString();
@@ -78,9 +87,21 @@ final class DownloadStore {
         boolean wifi = prefs.getBoolean("wifi", false);
         db.beginTransaction();
         try {
+            Set<String> existing = new HashSet<>();
+            Set<String> candidates = new HashSet<>();
+            for (MediaInfo.Track track : tracks) if (!track.live()) candidates.add(track.url());
+            List<String> urls = new ArrayList<>(candidates);
+            // Bound both SQLite bind parameters and memory to the requested batch, not all history.
+            for (int first = 0; first < urls.size(); first += 500) {
+                String[] args = urls.subList(first, Math.min(first + 500, urls.size())).toArray(new String[0]);
+                String placeholders = String.join(",", java.util.Collections.nCopies(args.length, "?"));
+                try (Cursor cursor = db.query(true, "jobs", new String[]{"url"}, "kind='download' AND (" + ACTIVE + " OR status='complete') AND url IN (" + placeholders + ")", args, null, null, null, null)) {
+                    while (cursor.moveToNext()) existing.add(cursor.getString(0));
+                }
+            }
             for (MediaInfo.Track track : tracks) {
                 if (Thread.currentThread().isInterrupted()) throw new IllegalStateException("キューへの追加を中止しました。");
-                if (track.live() || !seen.add(track.url()) || count("url=? AND (" + ACTIVE + " OR status='complete')", new String[]{track.url()}) > 0) {
+                if (track.live() || !seen.add(track.url()) || existing.contains(track.url())) {
                     skipped++; continue;
                 }
                 db.insertOrThrow("jobs", null, values(create(track, "", "最高品質・自動選択", wifi), batch, title));
@@ -88,7 +109,7 @@ final class DownloadStore {
             }
             db.setTransactionSuccessful();
             return new Added(batch, added, skipped);
-        } finally { db.endTransaction(); }
+        } finally { endChange(); }
     }
     Entry enqueuePitch(String uri, String title, PitchSettings settings) {
         if (!"content".equalsIgnoreCase(android.net.Uri.parse(uri).getScheme())) throw new IllegalArgumentException("端末の音声ファイルを選択してください。");
@@ -99,10 +120,10 @@ final class DownloadStore {
                 throw new IllegalStateException("同じ設定のキー変更を処理中です。");
             String name = title + " [キー " + settings.label() + "]";
             Entry e = new Entry(UUID.randomUUID().toString(), name, uri, "", settings.label() + " • テンポ維持 • " + settings.formatLabel(),
-                    "queued", "キー変更の開始待ち", 0, "", "", false, "pitch", settings.semitones(), settings.preserveFormants(), settings.format(), VocalQuality.STANDARD.id);
+                    "queued", "キー変更の開始待ち", 0, "", "", false, "pitch", settings.semitones(), settings.preserveFormants(), settings.format(), VocalQuality.STANDARD.id, "");
             db.insertOrThrow("jobs", null, values(e, UUID.randomUUID().toString(), name));
             db.setTransactionSuccessful(); return e;
-        } finally { db.endTransaction(); }
+        } finally { endChange(); }
     }
     Entry retry(Entry entry) {
         if (entry.vocalJob()) return enqueueVocals(entry.url(), entry.title().replaceFirst(" \\[ボーカル\\]$", ""), VocalQuality.fromId(entry.vocalQuality()));
@@ -117,40 +138,45 @@ final class DownloadStore {
         try {
             if (count("url=? AND kind='vocals' AND vocal_quality=? AND " + ACTIVE, new String[]{uri, mode.id}) > 0) throw new IllegalStateException("この音源のボーカルを抽出中です。");
             String name = title + " [ボーカル]";
-            Entry entry = new Entry(UUID.randomUUID().toString(), name, uri, "", "ボーカル抽出 · " + mode.label + " • FLAC · 24bit · 44.1kHz", "queued", "ボーカル抽出の開始待ち", 0, "", "", false, "vocals", 0, false, "flac", mode.id);
+            Entry entry = new Entry(UUID.randomUUID().toString(), name, uri, "", "ボーカル抽出 · " + mode.label + " • FLAC · 24bit · 44.1kHz", "queued", "ボーカル抽出の開始待ち", 0, "", "", false, "vocals", 0, false, "flac", mode.id, "");
             db.insertOrThrow("jobs", null, values(entry, UUID.randomUUID().toString(), name));
             db.setTransactionSuccessful(); return entry;
-        } finally { db.endTransaction(); }
+        } finally { endChange(); }
     }
     List<MediaInfo.Track> failed(String batch) {
         List<MediaInfo.Track> tracks = new ArrayList<>();
         for (Entry e : select("batch_id=? AND kind='download' AND status='failed'", new String[]{batch}, "seq ASC", null)) tracks.add(track(e));
         return tracks;
     }
-    private MediaInfo.Track track(Entry e) { return new MediaInfo.Track("", e.title, "", e.url, "", 0, false, List.of()); }
+    private MediaInfo.Track track(Entry e) { return new MediaInfo.Track("", e.title, e.artist, e.url, "", 0, false, List.of()); }
     private Entry create(MediaInfo.Track track, String format, String quality, boolean wifi) {
-        return new Entry(UUID.randomUUID().toString(), track.title(), track.url(), format, quality, "queued", "開始待ち", 0, "", "", wifi, "download", 0, true, "flac", VocalQuality.STANDARD.id);
+        return new Entry(UUID.randomUUID().toString(), track.title(), track.url(), format, quality, "queued", "開始待ち", 0, "", "", wifi, "download", 0, true, "flac", VocalQuality.STANDARD.id, track.artist());
     }
     boolean update(String id, String status, String message, int percent, String uri, String filename) {
         ContentValues values = new ContentValues();
         values.put("status", status); values.put("message", message); values.put("progress", percent);
         if (uri != null) values.put("content_uri", uri);
         if (filename != null) values.put("filename", filename);
-        return db.update("jobs", values, "id=? AND " + ACTIVE, new String[]{id}) > 0;
+        int rows = db.update("jobs", values, "id=? AND " + ACTIVE, new String[]{id}); changed(rows); return rows > 0;
+    }
+    boolean updateSong(String id, String title, String artist) {
+        if (title.isBlank()) return false;
+        ContentValues values = new ContentValues(); values.put("title", title); values.put("artist", artist);
+        int rows = db.update("jobs", values, "id=? AND kind='download' AND " + ACTIVE, new String[]{id}); changed(rows); return rows > 0;
     }
     void cancelBatch(String batch) {
         ContentValues values = new ContentValues(); values.put("status", "cancelled"); values.put("message", "一括保存を中止しました");
-        db.update("jobs", values, "batch_id=? AND " + ACTIVE, new String[]{batch});
+        changed(db.update("jobs", values, "batch_id=? AND " + ACTIVE, new String[]{batch}));
     }
     void failBatch(String batch, String message) {
         ContentValues values = new ContentValues(); values.put("status", "failed"); values.put("message", message);
-        db.update("jobs", values, "batch_id=? AND " + ACTIVE, new String[]{batch});
+        changed(db.update("jobs", values, "batch_id=? AND " + ACTIVE, new String[]{batch}));
     }
     void recoverInterrupted() {
         ContentValues values = new ContentValues(); values.put("status", "failed");
         values.put("message", "前回の処理が終了しました。再試行してください。");
         values.put("content_uri", ""); values.put("filename", "");
-        db.update("jobs", values, "status IN ('running','publishing')", null);
+        changed(db.update("jobs", values, "status IN ('running','publishing')", null));
     }
     List<Batch> batches() {
         List<Batch> result = new ArrayList<>();
@@ -165,7 +191,7 @@ final class DownloadStore {
             while (c.moveToNext()) result.add(new Entry(s(c, "id"), s(c, "title"), s(c, "url"), s(c, "format_id"), s(c, "quality"),
                     s(c, "status"), s(c, "message"), c.getInt(c.getColumnIndexOrThrow("progress")), s(c, "content_uri"),
                     s(c, "filename"), c.getInt(c.getColumnIndexOrThrow("wifi")) != 0, s(c, "kind"), c.getInt(c.getColumnIndexOrThrow("semitones")),
-                    c.getInt(c.getColumnIndexOrThrow("preserve_formants")) != 0, s(c, "output_format"), s(c, "vocal_quality")));
+                    c.getInt(c.getColumnIndexOrThrow("preserve_formants")) != 0, s(c, "output_format"), s(c, "vocal_quality"), s(c, "artist")));
         }
         return result;
     }
@@ -176,14 +202,15 @@ final class DownloadStore {
         v.put("quality", e.quality); v.put("status", e.status); v.put("message", e.message); v.put("progress", e.progress);
         v.put("content_uri", e.contentUri); v.put("filename", e.filename); v.put("wifi", e.wifiOnly ? 1 : 0);
         v.put("batch_id", batch); v.put("batch_title", title);
-        v.put("kind", e.kind); v.put("semitones", e.semitones); v.put("preserve_formants", e.preserveFormants ? 1 : 0); v.put("output_format", e.outputFormat); v.put("vocal_quality", e.vocalQuality);
+        v.put("kind", e.kind); v.put("semitones", e.semitones); v.put("preserve_formants", e.preserveFormants ? 1 : 0); v.put("output_format", e.outputFormat); v.put("vocal_quality", e.vocalQuality); v.put("artist", e.artist);
         return v;
     }
     private static final class Database extends SQLiteOpenHelper {
+        final java.util.concurrent.atomic.AtomicLong revision = new java.util.concurrent.atomic.AtomicLong();
         private final SharedPreferences previous;
-        Database(Context context) { super(context, "downloads.db", null, 3); this.previous = context.getSharedPreferences("tonekeep", Context.MODE_PRIVATE); setWriteAheadLoggingEnabled(true); }
+        Database(Context context) { super(context, "downloads.db", null, 4); this.previous = context.getSharedPreferences("tonekeep", Context.MODE_PRIVATE); setWriteAheadLoggingEnabled(true); }
         @Override public void onCreate(SQLiteDatabase db) {
-            db.execSQL("CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,title TEXT NOT NULL,url TEXT NOT NULL,format_id TEXT NOT NULL,quality TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,progress INTEGER NOT NULL,content_uri TEXT NOT NULL,filename TEXT NOT NULL,wifi INTEGER NOT NULL,batch_id TEXT NOT NULL,batch_title TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'download',semitones INTEGER NOT NULL DEFAULT 0,preserve_formants INTEGER NOT NULL DEFAULT 1,output_format TEXT NOT NULL DEFAULT 'flac',vocal_quality TEXT NOT NULL DEFAULT 'standard')");
+            db.execSQL("CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,title TEXT NOT NULL,url TEXT NOT NULL,format_id TEXT NOT NULL,quality TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,progress INTEGER NOT NULL,content_uri TEXT NOT NULL,filename TEXT NOT NULL,wifi INTEGER NOT NULL,batch_id TEXT NOT NULL,batch_title TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'download',semitones INTEGER NOT NULL DEFAULT 0,preserve_formants INTEGER NOT NULL DEFAULT 1,output_format TEXT NOT NULL DEFAULT 'flac',vocal_quality TEXT NOT NULL DEFAULT 'standard',artist TEXT NOT NULL DEFAULT '')");
             db.execSQL("CREATE INDEX jobs_status ON jobs(status,seq)");
             db.execSQL("CREATE INDEX jobs_source ON jobs(url,format_id,status)");
             db.execSQL("CREATE INDEX jobs_batch ON jobs(batch_id,status)");
@@ -195,12 +222,13 @@ final class DownloadStore {
                     JSONObject o = array.optJSONObject(i); if (o == null) continue;
                     Entry entry = new Entry(o.getString("id"), o.getString("title"), o.getString("url"), o.getString("formatId"),
                             o.getString("quality"), o.getString("status"), o.optString("message"), o.optInt("progress"),
-                            o.optString("contentUri"), o.optString("filename"), o.optBoolean("wifiOnly"), "download", 0, true, "flac", VocalQuality.STANDARD.id);
+                            o.optString("contentUri"), o.optString("filename"), o.optBoolean("wifiOnly"), "download", 0, true, "flac", VocalQuality.STANDARD.id, o.optString("artist", ""));
                     db.insertOrThrow("jobs", null, values(entry, "previous-version", "以前の保存履歴"));
                 }
             } catch (org.json.JSONException e) { throw new IllegalStateException("以前の履歴を読み込めませんでした。", e); }
         }
         @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            if (oldVersion < 4) db.execSQL("ALTER TABLE jobs ADD COLUMN artist TEXT NOT NULL DEFAULT ''");
             if (oldVersion < 3) db.execSQL("ALTER TABLE jobs ADD COLUMN vocal_quality TEXT NOT NULL DEFAULT 'standard'");
             if (oldVersion < 2) {
                 db.execSQL("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'download'");

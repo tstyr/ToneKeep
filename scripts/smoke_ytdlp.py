@@ -48,13 +48,19 @@ with tempfile.TemporaryDirectory(prefix="tonekeep-test-") as temp:
         raw = subprocess.run(base + ["--dump-single-json", "--skip-download", url], capture_output=True, text=True, check=True, timeout=60)
         info = json.loads(raw.stdout)
         assert info["title"] and info["formats"], info
+        # Search preview resolves a fresh direct audio URL without writing a media file.
+        sample_raw = subprocess.run(base + ["-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best", "--dump-single-json", "--skip-download", url],
+                                    capture_output=True, text=True, check=True, timeout=60)
+        sample = json.loads(sample_raw.stdout)
+        assert sample["url"] == url and sample.get("http_headers"), sample
         playlist_url = f"http://127.0.0.1:{server.server_port}/playlist.rss"
         collection_raw = subprocess.run([sys.executable, str(ENGINE), "--ignore-config", "--yes-playlist", "--flat-playlist", "--dump-single-json", "--skip-download", "--ignore-errors", playlist_url], capture_output=True, text=True, check=True, timeout=60)
         collection = json.loads(collection_raw.stdout)
         assert len(collection["entries"]) == 15, collection
         target = workspace / "out" / "audio.%(ext)s"
-        subprocess.run(base + ["-f", "bestaudio/best", "--extract-audio", "--audio-format", "best", "--no-mtime", "--no-overwrites", "--match-filters", "!is_live", "-o", str(target), url], capture_output=True, text=True, check=True, timeout=60)
-        outputs = list(target.parent.glob("audio.*"))
+        subprocess.run(base + ["-f", "bestaudio/best", "--extract-audio", "--audio-format", "best", "--embed-metadata", "--write-info-json", "--no-mtime", "--no-overwrites", "--match-filters", "!is_live", "-o", str(target), url], capture_output=True, text=True, check=True, timeout=60)
+        outputs = [file for file in target.parent.glob("audio.*") if file.suffix != ".json"]
+        assert (target.parent / "audio.info.json").is_file()
         assert len(outputs) == 1, outputs
         probe = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(outputs[0])], capture_output=True, text=True, check=True, timeout=20)
         stream = json.loads(probe.stdout)["streams"][0]

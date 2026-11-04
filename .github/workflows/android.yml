@@ -51,6 +51,8 @@ jobs:
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/ToneKeep-preview.apk
+          python3 scripts/create_update_manifest.py dist/ToneKeep-preview.apk --output dist/update.json \
+            --download-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/preview-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}/ToneKeep-preview.apk"
           cd dist
           sha256sum ToneKeep-preview.apk > SHA256SUMS.txt
       - name: Upload APK
@@ -142,7 +144,9 @@ jobs:
           グループごとの一括中止・失敗した曲だけの再試行に対応します。
           「キー変更」で端末の音声ファイル、または保存済みの音源を選ぶと、テンポを保って−12〜＋12半音へ変更できます。
           ボーカルと伴奏をまとめて処理し、原本を残してFLAC／WAV（24bit）、MP3、M4A/AAC、Opus、Ogg/Vorbisで保存します。
-          1.5版では保存前の20秒試聴と、再生・一時停止・シークができるアプリ内プレーヤーを追加しました。試聴中にキーや声質を変更でき、曲の好きな位置を選べます。
+          1.6版では検索結果のサムネイル・保存前の30秒試聴、標準／高精度を切り替えられるボーカル抽出、曲名・アーティストの取得改善、歌詞検索、ログイン不要のアプリ内更新に対応しました。
+          右上の ⋮ → アプリの更新 から次の公開版を確認・取得できます。APKのチェックサム・アプリID・新しいバージョン・署名を確認してからAndroidのインストール画面を開きます。
+          ボーカル抽出のモデルは初回のみ約64MBを取得します。歌詞提供はLRCLIBで、曲名・アーティスト名を修正して再検索できます。
 
           曲名検索はYouTube / SoundCloud、URL入力はyt-dlpの対応サイトに対応します。
           元の音声形式を優先します。音質は配信元の音源が上限です。

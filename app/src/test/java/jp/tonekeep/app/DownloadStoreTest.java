@@ -34,6 +34,39 @@ public class DownloadStoreTest {
         if (helper != null) helper.close(); instance.set(null, null); context.deleteDatabase("downloads.db");
     }
     private MediaInfo.Track track(int index) { return new MediaInfo.Track("" + index, "Track " + index, "Artist", "https://example.com/song/" + index, "Test", 120, false, List.of()); }
+    @Test public void detailedSongMetadataIsPersistedAndRetriedWithoutLosingTheArtist() {
+        DownloadStore store = new DownloadStore(context); DownloadStore.Entry original = store.enqueue(track(0), "", "best");
+        assertEquals("Artist", store.find(original.id()).artist());
+        assertTrue(store.updateSong(original.id(), "Formal title", "Formal artist"));
+        DownloadStore.Entry updated = store.find(original.id()); assertEquals("Formal title", updated.title()); assertEquals("Formal artist", updated.artist());
+        store.update(original.id(), "failed", "retry", 0, null, null);
+        assertFalse(store.updateSong(original.id(), "Late title", "Late artist"));
+        assertEquals("Formal artist", store.retry(updated).artist());
+    }
+    @Test public void sharedRevisionTracksWritesWhileReadsAndRejectedUpdatesLeaveItUnchanged() {
+        DownloadStore first = new DownloadStore(context), second = new DownloadStore(context);
+        long initial = first.revision();
+        DownloadStore.Entry entry = second.enqueue(track(0), "", "best");
+        assertTrue(first.revision() > initial); assertTrue(first.isActive(entry.id()));
+        long added = first.revision();
+        first.all(); first.recent(12); first.batches(); first.find(entry.id()); first.count();
+        assertEquals(added, first.revision());
+        second.update(entry.id(), "cancelled", "cancel", 0, null, null);
+        assertFalse(first.isActive(entry.id())); assertTrue(first.revision() > added);
+        long cancelled = first.revision();
+        assertFalse(second.update(entry.id(), "complete", "late", 100, null, null));
+        assertEquals(cancelled, first.revision());
+    }
+    @Test public void bulkDuplicateDetectionWorksAcrossSqliteParameterChunks() {
+        DownloadStore store = new DownloadStore(context);
+        List<MediaInfo.Track> tracks = new ArrayList<>(); for (int i = 0; i < 1200; i++) tracks.add(track(i));
+        DownloadStore.Added initial = store.enqueueBatch(tracks, "Large list"); assertEquals(1200, initial.added());
+        DownloadStore.Added repeated = store.enqueueBatch(tracks, "Repeated");
+        assertEquals(0, repeated.added()); assertEquals(1200, repeated.skipped()); assertEquals(1200, store.count());
+        DownloadStore.Entry first = store.queued().get(0);
+        store.update(first.id(), "failed", "retry", 0, null, null);
+        DownloadStore.Added retry = store.enqueueBatch(tracks, "Retry"); assertEquals(1, retry.added()); assertEquals(1199, retry.skipped());
+    }
 
     @Test public void vocalJobsPersistAndRetryAsLocalSeparationWithoutDuplicateTitles() {
         DownloadStore store = new DownloadStore(context);

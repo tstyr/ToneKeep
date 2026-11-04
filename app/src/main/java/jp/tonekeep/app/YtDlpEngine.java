@@ -55,6 +55,7 @@ final class YtDlpEngine {
     }
     static MediaInfo.Track details(Context context, String url, String process) throws Exception {
         init(context);
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedException("中止しました。");
         YoutubeDLRequest request = base(MediaInfo.webUrl(url)).addOption("--dump-single-json").addOption("--skip-download");
         MediaInfo.Track track = MediaInfo.parseTrack(new JSONObject(YoutubeDL.getInstance().execute(request, process).getOut()));
         if (track.live()) throw new IllegalArgumentException("配信中のライブには対応していません。公開済みの音源を選んでください。");
@@ -67,6 +68,13 @@ final class YtDlpEngine {
         YoutubeDL.getInstance().execute(request, entry.id(), (percent, eta, line) -> {
             progress.update(percent, line); return Unit.INSTANCE;
         });
+        File metadata = new File(directory, "audio.info.json");
+        if (metadata.isFile() && metadata.length() <= 8 * 1024 * 1024) {
+            try {
+                MediaInfo.Track song = MediaInfo.parseTrack(new JSONObject(new String(java.nio.file.Files.readAllBytes(metadata.toPath()), java.nio.charset.StandardCharsets.UTF_8)));
+                new DownloadStore(context).updateSong(entry.id(), song.title(), song.artist());
+            } catch (org.json.JSONException | IllegalArgumentException | java.io.IOException ignored) { }
+        }
         File[] files = directory.listFiles((dir, name) -> name.startsWith("audio.") && !name.endsWith(".part")
                 && !name.endsWith(".ytdl") && !name.endsWith(".json"));
         if (files == null || files.length != 1 || files[0].length() == 0)
@@ -76,9 +84,22 @@ final class YtDlpEngine {
     static YoutubeDLRequest downloadRequest(String url, String formatId, File directory) {
         return base(MediaInfo.webUrl(url)).addOption("-f", formatId.isEmpty() ? "bestaudio/best" : formatId)
                 .addOption("--extract-audio").addOption("--audio-format", "best")
+                .addOption("--embed-metadata")
+                .addOption("--write-info-json")
                 .addOption("--no-mtime").addOption("--no-overwrites")
                 .addOption("--match-filters", "!is_live")
                 .addOption("-o", new File(directory, "audio.%(ext)s").getAbsolutePath());
+    }
+    static YoutubeDLRequest sampleRequest(String url) {
+        return base(MediaInfo.downloadPage(url)).addOption("-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best")
+                .addOption("--dump-single-json").addOption("--skip-download").addOption("--match-filters", "!is_live");
+    }
+    static MediaInfo.Sample sample(Context context, String url, String process, java.util.function.BooleanSupplier active) throws Exception {
+        init(context);
+        if (!active.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new InterruptedException("試聴を中止しました。");
+        String json = YoutubeDL.getInstance().execute(sampleRequest(url), process).getOut();
+        if (!active.getAsBoolean()) throw new InterruptedException("試聴を中止しました。");
+        return MediaInfo.parseSample(json);
     }
     static String update(Context context) throws Exception {
         init(context);

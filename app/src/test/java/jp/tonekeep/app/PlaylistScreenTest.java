@@ -31,6 +31,22 @@ import static org.junit.Assert.*;
 @Config(sdk = 29)
 @SQLiteMode(SQLiteMode.Mode.LEGACY)
 public class PlaylistScreenTest {
+    @Test public void lyricsAllowCorrectingTheSongAndDisplayProvidedLyricsWithoutANetworkRequest() throws Exception {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            LyricsDialog lyrics = new LyricsDialog(controller.get());
+            try {
+                lyrics.show("Song", "Artist", 120, "Owned test lyrics");
+                android.app.AlertDialog form = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+                View view = form.getWindow().getDecorView();
+                assertEquals("Song", ((android.widget.EditText) description(view, "歌詞検索の曲名")).getText().toString());
+                ((android.widget.EditText) description(view, "歌詞検索のアーティスト")).setText("Corrected artist");
+                form.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).performClick();
+                Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+                android.app.AlertDialog result = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+                assertTrue(result.isShowing()); lyrics.close(); assertFalse(result.isShowing()); assertFalse(form.isShowing());
+            } finally { lyrics.close(); }
+        }
+    }
     @Before public void resetDatabase() throws Exception {
         Field field = DownloadStore.class.getDeclaredField("instance"); field.setAccessible(true); field.set(null, null);
         org.robolectric.RuntimeEnvironment.getApplication().deleteDatabase("downloads.db");
@@ -116,7 +132,10 @@ public class PlaylistScreenTest {
             for (int i = 0; i < 1000; i++) items.add(new MediaInfo.Track("" + i, "Song " + i, "Artist", "https://example.com/" + i, "Test", 120, false, List.of()));
             Method render = MainActivity.class.getDeclaredMethod("renderResults"); render.setAccessible(true); render.invoke(activity);
             ViewGroup root = activity.findViewById(android.R.id.content);
+            CheckBox first = widget(root, CheckBox.class); first.performClick();
+            assertSame(first, widget(root, CheckBox.class)); assertTrue(find(root, "保存（1）").isShown());
             assertTrue(find(root, "全選択").performClick());
+            assertSame(first, widget(root, CheckBox.class)); assertTrue(first.isChecked());
             Field selectedField = MainActivity.class.getDeclaredField("selected"); selectedField.setAccessible(true);
             assertEquals(1000, ((Set<?>) selectedField.get(activity)).size());
             assertTrue(find(root, "保存（1000）").isShown());
@@ -126,6 +145,54 @@ public class PlaylistScreenTest {
             finally { parcel.recycle(); }
             assertNotNull(activity.onRetainNonConfigurationInstance());
             description(root, "選択を解除").performClick(); assertTrue(((Set<?>) selectedField.get(activity)).isEmpty());
+            assertSame(first, widget(root, CheckBox.class)); assertFalse(first.isChecked());
+        }
+    }
+    @Test public void historyOnlyRebuildsAfterAnotherStoreClientChangesIt() throws Exception {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get(); DownloadStore writer = new DownloadStore(activity);
+            DownloadStore.Entry entry = writer.enqueue(new MediaInfo.Track("1", "Existing", "", "https://example.com/history", "Test", 1, false, List.of()), "", "best");
+            ViewGroup root = activity.findViewById(android.R.id.content); description(root, "ライブラリ").performClick();
+            Field field = MainActivity.class.getDeclaredField("results"); field.setAccessible(true);
+            ViewGroup rows = (ViewGroup) field.get(activity); View first = rows.getChildAt(0);
+            Method render = MainActivity.class.getDeclaredMethod("renderDownloads", boolean.class); render.setAccessible(true);
+            render.invoke(activity, false); assertSame(first, rows.getChildAt(0));
+            writer.update(entry.id(), "running", "work", 25, null, null);
+            render.invoke(activity, false); assertNotSame(first, rows.getChildAt(0));
+            View updated = rows.getChildAt(0); render.invoke(activity, false); assertSame(updated, rows.getChildAt(0));
+        }
+    }
+    @Test public void searchCardsShowArtworkAndPreviewBeforeAnyDownloadIsQueued() throws Exception {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get();
+            Field itemsField = MainActivity.class.getDeclaredField("items"); itemsField.setAccessible(true);
+            @SuppressWarnings("unchecked") List<MediaInfo.Track> items = (List<MediaInfo.Track>) itemsField.get(activity);
+            items.add(new MediaInfo.Track("1", "Song", "Artist", "https://example.com/song", "Test", 120, false, List.of()));
+            items.add(new MediaInfo.Track("2", "Live", "Artist", "https://example.com/live", "Test", 0, true, List.of()));
+            Method render = MainActivity.class.getDeclaredMethod("renderResults"); render.setAccessible(true); render.invoke(activity);
+            ViewGroup root = activity.findViewById(android.R.id.content);
+            assertNotNull(((android.widget.ImageView) description(root, "Songのサムネイル")).getDrawable());
+            assertTrue(description(root, "Songを試聴（最大30秒）").isEnabled());
+            assertFalse(description(root, "Liveを試聴（最大30秒）").isEnabled());
+            assertTrue(description(root, "Songの保存形式を選ぶ").isEnabled());
+            assertEquals(0, new DownloadStore(activity).count());
+        }
+    }
+    @Test public void artworkLoadsAndActivityCanCloseWithAnImageRequest() throws Exception {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get();
+            java.io.File thumbnail = new java.io.File(activity.getCacheDir(), "owned-thumbnail.png");
+            java.nio.file.Files.write(thumbnail.toPath(), java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="));
+            Field itemsField = MainActivity.class.getDeclaredField("items"); itemsField.setAccessible(true);
+            @SuppressWarnings("unchecked") List<MediaInfo.Track> items = (List<MediaInfo.Track>) itemsField.get(activity);
+            items.add(new MediaInfo.Track("1", "Artwork", "Artist", "https://example.com/song", "Test", 120, false, List.of(), Uri.fromFile(thumbnail).toString()));
+            Method render = MainActivity.class.getDeclaredMethod("renderResults"); render.setAccessible(true); render.invoke(activity);
+            android.widget.ImageView image = (android.widget.ImageView) description(activity.findViewById(android.R.id.content), "Artworkのサムネイル");
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (!(image.getDrawable() instanceof android.graphics.drawable.BitmapDrawable) && System.nanoTime() < deadline) {
+                Shadows.shadowOf(android.os.Looper.getMainLooper()).idle(); Thread.sleep(20);
+            }
+            assertTrue("Artwork must replace the placeholder", image.getDrawable() instanceof android.graphics.drawable.BitmapDrawable);
         }
     }
     private Button find(View root, String text) {

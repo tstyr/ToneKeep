@@ -108,4 +108,43 @@ public class MediaInfoTest {
     private JSONObject format(String id, String vcodec, String acodec) throws Exception {
         return new JSONObject().put("format_id", id).put("ext", "webm").put("vcodec", vcodec).put("acodec", acodec);
     }
+    @Test public void formalSongMetadataWinsOverVideoTitlesAndBlankArtistFieldsFallBack() throws Exception {
+        JSONObject item = new JSONObject().put("url", "https://example.com/song").put("title", "Video title (Official Video)")
+                .put("track", "Actual song").put("artist", "").put("artists", new JSONArray().put(JSONObject.NULL).put("Actual artist"))
+                .put("creator", "Generic publisher")
+                .put("uploader", "Label").put("lyrics", "Owned test line");
+        MediaInfo.Track track = MediaInfo.parseTrack(item);
+        assertEquals("Actual song", track.title()); assertEquals("Actual artist", track.artist()); assertEquals("Owned test line", track.lyrics());
+        assertTrue(YtDlpEngine.downloadRequest(track.url(), "", new File("stage")).hasOption("--embed-metadata"));
+        assertTrue(YtDlpEngine.downloadRequest(track.url(), "", new File("stage")).hasOption("--write-info-json"));
+    }
+    @Test public void thumbnailsPreferMediumHttpsImagesAndFlatYoutubeHasAFallback() throws Exception {
+        JSONObject track = new JSONObject().put("url", "https://example.com/song").put("thumbnail", "file:///private.jpg")
+                .put("thumbnails", new JSONArray().put(new JSONObject().put("url", "https://cdn.example.com/large.jpg").put("width", 1920))
+                        .put(new JSONObject().put("url", "https://cdn.example.com/medium.jpg").put("width", 320))
+                        .put(new JSONObject().put("url", "http://cdn.example.com/insecure.jpg").put("width", 320)));
+        assertEquals("https://cdn.example.com/medium.jpg", MediaInfo.parseTrack(track).thumbnail());
+        assertEquals("https://i.ytimg.com/vi/abcdefghijk/mqdefault.jpg", MediaInfo.parseTrack(new JSONObject()
+                .put("id", "abcdefghijk").put("url", "abcdefghijk").put("ie_key", "Youtube")).thumbnail());
+        assertEquals("", MediaInfo.parseTrack(new JSONObject().put("url", "https://example.com/song").put("thumbnail", "https://name:secret@example.com/image")).thumbnail());
+    }
+    @Test public void samplesUseFreshDirectHttpsAudioAndOnlySafeRequestHeaders() throws Exception {
+        MediaInfo.Sample sample = MediaInfo.parseSample(new JSONObject().put("url", "https://cdn.example.com/audio.m4a?expires=123")
+                .put("webpage_url", "https://example.com/song").put("http_headers", new JSONObject()
+                        .put("User-Agent", "Fixture").put("Referer", "https://example.com/").put("Host", "wrong.example")
+                        .put("Cookie", "bad\r\nInjected: value")).toString());
+        assertTrue(sample.url().contains("cdn.example.com")); assertEquals("Fixture", sample.headers().get("User-Agent"));
+        assertFalse(sample.headers().containsKey("Host")); assertFalse(sample.headers().containsKey("Cookie"));
+        assertThrows(UnsupportedOperationException.class, () -> sample.headers().put("x", "y"));
+        for (String url : List.of("file:///audio", "http://example.com/audio", "https://name:secret@example.com/audio"))
+            assertThrows(IllegalArgumentException.class, () -> MediaInfo.parseSample(new JSONObject().put("url", url).toString()));
+        assertThrows(IllegalArgumentException.class, () -> MediaInfo.parseSample(new JSONObject().put("url", "https://example.com/audio").put("is_live", true).toString()));
+    }
+    @Test public void sampleRequestResolvesAudioWithoutCreatingADownloadJobOrOutputFile() {
+        YoutubeDLRequest request = YtDlpEngine.sampleRequest("https://example.com/song?x=1&y=2");
+        assertTrue(request.hasOption("--skip-download")); assertTrue(request.hasOption("--dump-single-json"));
+        assertTrue(request.hasOption("--no-playlist")); assertEquals("!is_live", request.getOption("--match-filters"));
+        assertTrue(request.getOption("-f").startsWith("bestaudio[ext=m4a]"));
+        assertFalse(request.hasOption("-o")); assertFalse(request.hasOption("--no-check-certificates"));
+    }
 }

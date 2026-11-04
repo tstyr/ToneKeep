@@ -47,6 +47,7 @@ public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(16, 23, 22), CARD = Color.rgb(27, 37, 34), MINT = Color.rgb(183, 245, 207),
             TEXT = Color.rgb(240, 244, 237), MUTED = Color.rgb(160, 179, 168), BORDER = Color.rgb(47, 65, 56);
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService sampleWorker = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final String processId = "lookup-" + UUID.randomUUID();
     private DownloadStore downloads;
@@ -55,16 +56,30 @@ public final class MainActivity extends Activity {
     private LinearLayout body, results, actions;
     private TextView status;
     private TextView selectionStatus;
+    private Button selectionSave;
+    private final List<CheckBox> resultChecks = new ArrayList<>();
+    private final List<ImageView> resultArtwork = new ArrayList<>();
+    private com.bumptech.glide.RequestManager artworkLoader;
+    private boolean syncingSelection;
     private LinearLayout searchTab, libraryTab, pitchTab;
     private boolean pitchMode;
-    private String pitchSourceUri = "", pitchSourceName = "", pitchSnapshot = "";
+    private String pitchSourceUri = "", pitchSourceName = "";
+    private long libraryRevision = -1, pitchRevision = -1;
+    private List<DownloadStore.Entry> libraryEntries = List.of(), pitchEntries = List.of();
+    private List<DownloadStore.Batch> libraryBatches = List.of();
+    private int libraryTotal = -1;
     private int pitchSemitones;
     private boolean pitchFormants = true;
     private String pitchOutput = "flac";
     private AudioPlayer player;
     private PreviewAudio previewAudio;
+    private LyricsDialog lyrics;
+    private AppUpdateController appUpdates;
     private boolean previewWanted;
-    private int previewPosition, listenGeneration;
+    private int previewPosition;
+    private volatile int listenGeneration;
+    private Future<?> sampleRequest;
+    private String sampleProcess;
     private final Runnable previewChange = () -> requestPreview(previewPosition);
     private ProgressBar progress;
     private final List<MediaInfo.Track> items = new ArrayList<>();
@@ -72,7 +87,7 @@ public final class MainActivity extends Activity {
     private boolean library, busy, searched;
     private int generation, selectedSource, visibleCount = 40, historyLimit = 80;
     private String collectionTitle = "選択した音源";
-    private String query = "", librarySnapshot = "";
+    private String query = "";
     private Future<?> request;
     private record LookupState(List<MediaInfo.Track> items, Set<String> selected, String title, boolean searched) { }
     private final Runnable refresh = new Runnable() {
@@ -83,6 +98,7 @@ public final class MainActivity extends Activity {
         super.onCreate(saved);
         downloads = new DownloadStore(this);
         previewAudio = new PreviewAudio(this);
+        lyrics = new LyricsDialog(this); appUpdates = new AppUpdateController(this);
         if (saved != null) {
             query = saved.getString("query", ""); selectedSource = saved.getInt("source");
             pitchSourceUri = saved.getString("pitch_uri", ""); pitchSourceName = saved.getString("pitch_name", "");
@@ -196,6 +212,8 @@ public final class MainActivity extends Activity {
     }
     private void renderResults() {
         if (library || pitchMode || results == null) return;
+        clearResultArtwork();
+        resultChecks.clear(); selectionSave = null; selectionStatus = null;
         results.removeAllViews();
         status.setText(busy ? "読み込み中…" : items.isEmpty() ? (searched ? "見つかりませんでした" : "") : items.size() + "曲");
         if (items.isEmpty() && !searched) {
@@ -210,35 +228,76 @@ public final class MainActivity extends Activity {
             selectionStatus = text(selected.size() + " / " + items.size(), 13, MINT, true);
             LinearLayout choices = row();
             choices.addView(selectionStatus, new LinearLayout.LayoutParams(0, -2, 1));
-            choices.addView(button("全選択", false, v -> { for (MediaInfo.Track track : items) if (!track.live()) selected.add(track.url()); renderResults(); }), new LinearLayout.LayoutParams(0, -2, 1));
-            choices.addView(iconButton(UiIcon.Kind.CLOSE, "選択を解除", v -> { selected.clear(); renderResults(); }));
+            choices.addView(button("全選択", false, v -> { for (MediaInfo.Track track : items) if (!track.live()) selected.add(track.url()); updateSelection(); }), new LinearLayout.LayoutParams(0, -2, 1));
+            choices.addView(iconButton(UiIcon.Kind.CLOSE, "選択を解除", v -> { selected.clear(); updateSelection(); }));
             add(results, choices, 0, 8);
-            if (!selected.isEmpty()) add(results, button("保存（" + selected.size() + "）", true, v -> {
+            selectionSave = button("保存（" + selected.size() + "）", true, v -> {
                 List<MediaInfo.Track> chosen = new ArrayList<>(); for (MediaInfo.Track track : items) if (selected.contains(track.url())) chosen.add(track);
                 enqueueBatch(chosen, collectionTitle);
-            }), 0, 14);
+            });
+            selectionSave.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE); add(results, selectionSave, 0, 14);
         }
         for (MediaInfo.Track track : items.subList(0, Math.min(items.size(), visibleCount))) {
             LinearLayout card = card();
             LinearLayout trackRow = row();
             CheckBox check = new CheckBox(this); check.setContentDescription(track.title() + "を選択"); check.setTextColor(MUTED);
             check.setMinHeight(dp(48)); check.setChecked(selected.contains(track.url())); check.setEnabled(!track.live());
+            check.setTag(track.url()); resultChecks.add(check);
             check.setOnCheckedChangeListener((v, checked) -> {
+                if (syncingSelection) return;
                 if (checked) selected.add(track.url()); else selected.remove(track.url());
-                renderResults();
+                updateSelection();
             });
             trackRow.addView(check, new LinearLayout.LayoutParams(dp(40), dp(48)));
+            ImageView artwork = new ImageView(this);
+            artwork.setContentDescription(track.title() + "のサムネイル"); artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            artwork.setBackground(round(BORDER, 8, BORDER)); artwork.setClipToOutline(true);
+            artwork.setImageDrawable(new UiIcon(UiIcon.Kind.MUSIC, MUTED));
+            LinearLayout.LayoutParams artworkParams = new LinearLayout.LayoutParams(dp(64), dp(64)); artworkParams.rightMargin = dp(10);
+            trackRow.addView(artwork, artworkParams);
+            if (!track.thumbnail().isEmpty()) {
+                resultArtwork.add(artwork);
+                if (artworkLoader == null) artworkLoader = com.bumptech.glide.Glide.with(this);
+                artworkLoader.load(track.thumbnail())
+                    .override(dp(128), dp(128)).centerCrop().placeholder(new UiIcon(UiIcon.Kind.MUSIC, MUTED))
+                    .error(new UiIcon(UiIcon.Kind.MUSIC, MUTED)).into(artwork);
+            }
             LinearLayout names = column();
             add(names, clipped(track.title(), 16, TEXT, true, 2), 0, 4);
             if (!track.artist().isEmpty()) add(names, clipped(track.artist(), 12, MUTED, false, 1), 0, 4);
             add(names, text(track.site() + " · " + MediaInfo.duration(track.duration()), 11, MUTED, false), 0, 0);
             names.setOnClickListener(v -> details(track)); trackRow.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
-            trackRow.addView(iconButton(UiIcon.Kind.DOWNLOAD, "保存形式を選ぶ", v -> details(track)));
             card.addView(trackRow);
+            LinearLayout controls = row();
+            Button sample = compactButton("試聴", UiIcon.Kind.PLAY, v -> previewSearch(track));
+            sample.setContentDescription(track.title() + "を試聴（最大30秒）"); sample.setEnabled(!track.live());
+            controls.addView(sample, new LinearLayout.LayoutParams(0, -2, 1));
+            Button words = compactButton("歌詞", UiIcon.Kind.LIST, v -> lyrics.show(track));
+            words.setContentDescription(track.title() + "の曲名・歌詞を確認"); words.setEnabled(!track.live());
+            controls.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
+            Button save = compactButton("保存", UiIcon.Kind.DOWNLOAD, v -> details(track));
+            save.setContentDescription(track.title() + "の保存形式を選ぶ");
+            controls.addView(save, new LinearLayout.LayoutParams(0, -2, 1));
+            card.addView(controls);
             add(results, card, 0, 12);
         }
         if (items.size() > visibleCount) add(results, button(getString(R.string.load_more_tracks, items.size() - visibleCount), false,
                 v -> { visibleCount += 40; renderResults(); }), 0, 8);
+    }
+    private void updateSelection() {
+        syncingSelection = true;
+        try { for (CheckBox check : resultChecks) check.setChecked(selected.contains((String) check.getTag())); }
+        finally { syncingSelection = false; }
+        if (selectionStatus != null) selectionStatus.setText(selected.size() + " / " + items.size());
+        if (selectionSave != null) {
+            selectionSave.setText("保存（" + selected.size() + "）");
+            selectionSave.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+    }
+    private void clearResultArtwork() {
+        if (resultArtwork.isEmpty()) return;
+        for (ImageView image : resultArtwork) artworkLoader.clear(image);
+        resultArtwork.clear();
     }
     private void enqueueBatch(List<MediaInfo.Track> tracks, String title) {
         if (busy) { toast("現在の処理が終わるまでお待ちください。"); return; }
@@ -300,6 +359,8 @@ public final class MainActivity extends Activity {
             }
     }
     private void showLibrary() {
+        clearResultArtwork();
+        resultChecks.clear(); selectionSave = null; selectionStatus = null;
         actions.removeAllViews(); actions.setVisibility(View.GONE);
         if (!library && !pitchMode && input != null) { query = input.getText().toString(); selectedSource = source.getSelectedItemPosition(); }
         library = true; pitchMode = false; tabs(); body.removeAllViews();
@@ -307,9 +368,14 @@ public final class MainActivity extends Activity {
         results = column(); body.addView(results); renderDownloads(true);
     }
     private void renderDownloads(boolean force) {
+        long revision = downloads.revision();
+        if (!force && libraryRevision == revision) return;
+        libraryRevision = revision;
         List<DownloadStore.Entry> entries = downloads.recent(historyLimit);
         List<DownloadStore.Batch> batches = downloads.batches();
-        String snapshot = batches.toString() + entries; if (!force && snapshot.equals(librarySnapshot)) return; librarySnapshot = snapshot;
+        int total = downloads.count();
+        if (!force && entries.equals(libraryEntries) && batches.equals(libraryBatches) && total == libraryTotal) return;
+        libraryEntries = entries; libraryBatches = batches; libraryTotal = total;
         results.removeAllViews();
         for (DownloadStore.Batch batch : batches) {
             if (batch.total() < 2) continue;
@@ -331,7 +397,7 @@ public final class MainActivity extends Activity {
         for (DownloadStore.Entry entry : entries) {
             add(results, entryCard(entry), 0, 10);
         }
-        int remaining = downloads.count() - entries.size();
+        int remaining = total - entries.size();
         if (remaining > 0) add(results, button(getString(R.string.load_more_history, remaining), false,
                 v -> { historyLimit += 80; renderDownloads(true); }), 0, 8);
     }
@@ -343,6 +409,8 @@ public final class MainActivity extends Activity {
         pitchSourceUri = uri; pitchSourceName = title; showPitch();
     }
     private void showPitch() {
+        clearResultArtwork();
+        resultChecks.clear(); selectionSave = null; selectionStatus = null;
         if (!library && !pitchMode && input != null) { query = input.getText().toString(); selectedSource = source.getSelectedItemPosition(); }
         library = false; pitchMode = true; tabs(); body.removeAllViews();
         LinearLayout heading = row(); heading.addView(text("キー変更", 25, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
@@ -422,8 +490,12 @@ public final class MainActivity extends Activity {
     }
     private void renderPitchJobs(boolean force) {
         if (!pitchMode || results == null) return;
-        List<DownloadStore.Entry> jobs = downloads.pitchRecent(); String snapshot = jobs.toString();
-        if (!force && snapshot.equals(pitchSnapshot)) return; pitchSnapshot = snapshot; results.removeAllViews();
+        long revision = downloads.revision();
+        if (!force && pitchRevision == revision) return;
+        pitchRevision = revision;
+        List<DownloadStore.Entry> jobs = downloads.pitchRecent();
+        if (!force && jobs.equals(pitchEntries)) return;
+        pitchEntries = jobs; results.removeAllViews();
         if (jobs.isEmpty()) add(results, text("まだ履歴はありません", 13, MUTED, false), 0, 8);
         for (DownloadStore.Entry entry : jobs) {
             add(results, entryCard(entry), 0, 10);
@@ -458,6 +530,10 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == AppUpdateController.PICK_APK) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) appUpdates.picked(data.getData());
+            return;
+        }
         if (requestCode != 1067 || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         if (!"content".equalsIgnoreCase(uri.getScheme())) { toast("端末の音声ファイルを選択してください。"); return; }
@@ -487,7 +563,29 @@ public final class MainActivity extends Activity {
             });
         });
     }
-    private void cancelListening() { ++listenGeneration; previewWanted = false; handler.removeCallbacks(previewChange); previewAudio.cancel(); }
+    private void previewSearch(MediaInfo.Track track) {
+        if (track.live()) { toast("配信中のライブは試聴できません。"); return; }
+        cancelListening(); int token = listenGeneration;
+        String process = "sample-" + UUID.randomUUID(); sampleProcess = process;
+        player.busy("試聴 · " + track.title());
+        sampleRequest = sampleWorker.submit(() -> {
+            try {
+                MediaInfo.Sample sample = YtDlpEngine.sample(this, track.url(), process, () -> token == listenGeneration);
+                handler.post(() -> {
+                    if (token != listenGeneration) return;
+                    sampleRequest = null; sampleProcess = null;
+                    player.loadSample(sample, "試聴 · " + track.title(), () -> listenFailed(token, "この音源を試聴できません。時間を置いて再試行してください。"));
+                });
+            } catch (Exception error) {
+                handler.post(() -> { if (token == listenGeneration) listenFailed(token, DownloadService.error(error)); });
+            }
+        });
+    }
+    private void cancelListening() {
+        ++listenGeneration; previewWanted = false; handler.removeCallbacks(previewChange); previewAudio.cancel();
+        if (sampleRequest != null) { sampleRequest.cancel(true); sampleRequest = null; }
+        if (sampleProcess != null) { YtDlpEngine.cancel(sampleProcess); sampleProcess = null; }
+    }
     private void requestPreview(int startMs) {
         if (pitchSourceUri.isEmpty()) return;
         cancelListening(); previewWanted = true; previewPosition = Math.max(0, startMs); int token = listenGeneration;
@@ -557,11 +655,17 @@ public final class MainActivity extends Activity {
             downloads.prefs.edit().putBoolean("wifi", !item.isChecked()).apply(); return true;
         });
         menu.getMenu().add("yt-dlpを更新").setOnMenuItemClickListener(item -> { updateEngine(); return true; });
+        menu.getMenu().add("アプリの更新").setOnMenuItemClickListener(item -> { appUpdates.show(); return true; });
         menu.getMenu().add("ヘルプ").setOnMenuItemClickListener(item -> { about(); return true; });
         menu.getMenu().add("ライセンス").setOnMenuItemClickListener(item -> { licenses(); return true; }); menu.show();
     }
     private void entryMenu(View anchor, DownloadStore.Entry entry) {
         PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add("曲名・歌詞").setOnMenuItemClickListener(item -> {
+            if (entry.audioJob()) lyrics.show(entry.title().replaceFirst(" \\[(?:キー [^\\]]+|ボーカル)\\]$", ""), entry.artist(), 0, "");
+            else lyrics.show(new MediaInfo.Track("", entry.title(), entry.artist(), entry.url(), "", 0, false, List.of()));
+            return true;
+        });
         if (entry.status().equals("complete")) {
             menu.getMenu().add("キー変更").setOnMenuItemClickListener(item -> { selectPitch(entry.contentUri(), entry.title()); return true; });
             menu.getMenu().add("ボーカル抽出").setOnMenuItemClickListener(item -> { extractVocals(entry.contentUri(), entry.title()); return true; });
@@ -655,12 +759,15 @@ public final class MainActivity extends Activity {
     @Override public Object onRetainNonConfigurationInstance() {
         return new LookupState(new ArrayList<>(items), new LinkedHashSet<>(selected), collectionTitle, searched);
     }
-    @Override protected void onResume() { super.onResume(); handler.post(refresh); }
+    @Override protected void onResume() { super.onResume(); handler.post(refresh); if (appUpdates != null) appUpdates.resumed(); }
     @Override protected void onPause() {
         super.onPause(); handler.removeCallbacks(refresh);
         pauseListening();
     }
     @Override protected void onDestroy() {
+        if (lyrics != null) lyrics.close(); if (appUpdates != null) appUpdates.close();
+        clearResultArtwork();
+        cancelListening(); sampleWorker.shutdownNow();
         ++generation; if (request != null) request.cancel(true); YtDlpEngine.cancel(processId);
         worker.shutdownNow(); handler.removeCallbacksAndMessages(null);
         if (player != null) player.close(); if (previewAudio != null) previewAudio.close(); super.onDestroy();
