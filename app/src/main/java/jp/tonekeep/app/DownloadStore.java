@@ -22,9 +22,11 @@ final class DownloadStore {
     private final SQLiteDatabase db;
     record Entry(String id, String title, String url, String formatId, String quality, String status,
                  String message, int progress, String contentUri, String filename, boolean wifiOnly,
-                 String kind, int semitones, boolean preserveFormants, String outputFormat) {
+                 String kind, int semitones, boolean preserveFormants, String outputFormat, String vocalQuality) {
         boolean active() { return status.equals("queued") || status.equals("running") || status.equals("publishing"); }
         boolean pitchJob() { return kind.equals("pitch"); }
+        boolean vocalJob() { return kind.equals("vocals"); }
+        boolean audioJob() { return pitchJob() || vocalJob(); }
     }
     record Batch(String id, String title, int total, int queued, int running, int complete, int failed, int cancelled) {
         String description() { return "全" + total + "曲 • 完了 " + complete + " • 処理中 " + running + " • 待機 " + queued + " • 失敗 " + failed + " • 中止 " + cancelled; }
@@ -44,7 +46,7 @@ final class DownloadStore {
     }
     List<Entry> queued() { return select("status='queued'", null, "seq ASC", null); }
     List<Entry> activeEntries() { return select(ACTIVE, null, "seq ASC", null); }
-    List<Entry> pitchRecent() { return select("kind='pitch'", null, RECENT_ORDER, "12"); }
+    List<Entry> pitchRecent() { return select("kind IN ('pitch','vocals')", null, RECENT_ORDER, "12"); }
     Entry find(String id) {
         List<Entry> rows = select("id=?", new String[]{id}, null, "1");
         return rows.isEmpty() ? null : rows.get(0);
@@ -97,14 +99,28 @@ final class DownloadStore {
                 throw new IllegalStateException("同じ設定のキー変更を処理中です。");
             String name = title + " [キー " + settings.label() + "]";
             Entry e = new Entry(UUID.randomUUID().toString(), name, uri, "", settings.label() + " • テンポ維持 • " + settings.formatLabel(),
-                    "queued", "キー変更の開始待ち", 0, "", "", false, "pitch", settings.semitones(), settings.preserveFormants(), settings.format());
+                    "queued", "キー変更の開始待ち", 0, "", "", false, "pitch", settings.semitones(), settings.preserveFormants(), settings.format(), VocalQuality.STANDARD.id);
             db.insertOrThrow("jobs", null, values(e, UUID.randomUUID().toString(), name));
             db.setTransactionSuccessful(); return e;
         } finally { db.endTransaction(); }
     }
     Entry retry(Entry entry) {
+        if (entry.vocalJob()) return enqueueVocals(entry.url(), entry.title().replaceFirst(" \\[ボーカル\\]$", ""), VocalQuality.fromId(entry.vocalQuality()));
         if (entry.pitchJob()) return enqueuePitch(entry.url(), entry.title().replaceFirst(" \\[キー [^\\]]+\\]$", ""), new PitchSettings(entry.semitones(), entry.preserveFormants(), entry.outputFormat()));
         return enqueue(track(entry), entry.formatId(), entry.quality());
+    }
+    Entry enqueueVocals(String uri, String title) { return enqueueVocals(uri, title, VocalQuality.STANDARD); }
+    Entry enqueueVocals(String uri, String title, VocalQuality mode) {
+        java.util.Objects.requireNonNull(mode);
+        if (!"content".equalsIgnoreCase(android.net.Uri.parse(uri).getScheme())) throw new IllegalArgumentException("端末の音声ファイルを選択してください。");
+        db.beginTransaction();
+        try {
+            if (count("url=? AND kind='vocals' AND vocal_quality=? AND " + ACTIVE, new String[]{uri, mode.id}) > 0) throw new IllegalStateException("この音源のボーカルを抽出中です。");
+            String name = title + " [ボーカル]";
+            Entry entry = new Entry(UUID.randomUUID().toString(), name, uri, "", "ボーカル抽出 · " + mode.label + " • FLAC · 24bit · 44.1kHz", "queued", "ボーカル抽出の開始待ち", 0, "", "", false, "vocals", 0, false, "flac", mode.id);
+            db.insertOrThrow("jobs", null, values(entry, UUID.randomUUID().toString(), name));
+            db.setTransactionSuccessful(); return entry;
+        } finally { db.endTransaction(); }
     }
     List<MediaInfo.Track> failed(String batch) {
         List<MediaInfo.Track> tracks = new ArrayList<>();
@@ -113,7 +129,7 @@ final class DownloadStore {
     }
     private MediaInfo.Track track(Entry e) { return new MediaInfo.Track("", e.title, "", e.url, "", 0, false, List.of()); }
     private Entry create(MediaInfo.Track track, String format, String quality, boolean wifi) {
-        return new Entry(UUID.randomUUID().toString(), track.title(), track.url(), format, quality, "queued", "開始待ち", 0, "", "", wifi, "download", 0, true, "flac");
+        return new Entry(UUID.randomUUID().toString(), track.title(), track.url(), format, quality, "queued", "開始待ち", 0, "", "", wifi, "download", 0, true, "flac", VocalQuality.STANDARD.id);
     }
     boolean update(String id, String status, String message, int percent, String uri, String filename) {
         ContentValues values = new ContentValues();
@@ -149,7 +165,7 @@ final class DownloadStore {
             while (c.moveToNext()) result.add(new Entry(s(c, "id"), s(c, "title"), s(c, "url"), s(c, "format_id"), s(c, "quality"),
                     s(c, "status"), s(c, "message"), c.getInt(c.getColumnIndexOrThrow("progress")), s(c, "content_uri"),
                     s(c, "filename"), c.getInt(c.getColumnIndexOrThrow("wifi")) != 0, s(c, "kind"), c.getInt(c.getColumnIndexOrThrow("semitones")),
-                    c.getInt(c.getColumnIndexOrThrow("preserve_formants")) != 0, s(c, "output_format")));
+                    c.getInt(c.getColumnIndexOrThrow("preserve_formants")) != 0, s(c, "output_format"), s(c, "vocal_quality")));
         }
         return result;
     }
@@ -160,14 +176,14 @@ final class DownloadStore {
         v.put("quality", e.quality); v.put("status", e.status); v.put("message", e.message); v.put("progress", e.progress);
         v.put("content_uri", e.contentUri); v.put("filename", e.filename); v.put("wifi", e.wifiOnly ? 1 : 0);
         v.put("batch_id", batch); v.put("batch_title", title);
-        v.put("kind", e.kind); v.put("semitones", e.semitones); v.put("preserve_formants", e.preserveFormants ? 1 : 0); v.put("output_format", e.outputFormat);
+        v.put("kind", e.kind); v.put("semitones", e.semitones); v.put("preserve_formants", e.preserveFormants ? 1 : 0); v.put("output_format", e.outputFormat); v.put("vocal_quality", e.vocalQuality);
         return v;
     }
     private static final class Database extends SQLiteOpenHelper {
         private final SharedPreferences previous;
-        Database(Context context) { super(context, "downloads.db", null, 2); this.previous = context.getSharedPreferences("tonekeep", Context.MODE_PRIVATE); setWriteAheadLoggingEnabled(true); }
+        Database(Context context) { super(context, "downloads.db", null, 3); this.previous = context.getSharedPreferences("tonekeep", Context.MODE_PRIVATE); setWriteAheadLoggingEnabled(true); }
         @Override public void onCreate(SQLiteDatabase db) {
-            db.execSQL("CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,title TEXT NOT NULL,url TEXT NOT NULL,format_id TEXT NOT NULL,quality TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,progress INTEGER NOT NULL,content_uri TEXT NOT NULL,filename TEXT NOT NULL,wifi INTEGER NOT NULL,batch_id TEXT NOT NULL,batch_title TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'download',semitones INTEGER NOT NULL DEFAULT 0,preserve_formants INTEGER NOT NULL DEFAULT 1,output_format TEXT NOT NULL DEFAULT 'flac')");
+            db.execSQL("CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,title TEXT NOT NULL,url TEXT NOT NULL,format_id TEXT NOT NULL,quality TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,progress INTEGER NOT NULL,content_uri TEXT NOT NULL,filename TEXT NOT NULL,wifi INTEGER NOT NULL,batch_id TEXT NOT NULL,batch_title TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'download',semitones INTEGER NOT NULL DEFAULT 0,preserve_formants INTEGER NOT NULL DEFAULT 1,output_format TEXT NOT NULL DEFAULT 'flac',vocal_quality TEXT NOT NULL DEFAULT 'standard')");
             db.execSQL("CREATE INDEX jobs_status ON jobs(status,seq)");
             db.execSQL("CREATE INDEX jobs_source ON jobs(url,format_id,status)");
             db.execSQL("CREATE INDEX jobs_batch ON jobs(batch_id,status)");
@@ -179,12 +195,13 @@ final class DownloadStore {
                     JSONObject o = array.optJSONObject(i); if (o == null) continue;
                     Entry entry = new Entry(o.getString("id"), o.getString("title"), o.getString("url"), o.getString("formatId"),
                             o.getString("quality"), o.getString("status"), o.optString("message"), o.optInt("progress"),
-                            o.optString("contentUri"), o.optString("filename"), o.optBoolean("wifiOnly"), "download", 0, true, "flac");
+                            o.optString("contentUri"), o.optString("filename"), o.optBoolean("wifiOnly"), "download", 0, true, "flac", VocalQuality.STANDARD.id);
                     db.insertOrThrow("jobs", null, values(entry, "previous-version", "以前の保存履歴"));
                 }
             } catch (org.json.JSONException e) { throw new IllegalStateException("以前の履歴を読み込めませんでした。", e); }
         }
         @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            if (oldVersion < 3) db.execSQL("ALTER TABLE jobs ADD COLUMN vocal_quality TEXT NOT NULL DEFAULT 'standard'");
             if (oldVersion < 2) {
                 db.execSQL("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'download'");
                 db.execSQL("ALTER TABLE jobs ADD COLUMN semitones INTEGER NOT NULL DEFAULT 0");

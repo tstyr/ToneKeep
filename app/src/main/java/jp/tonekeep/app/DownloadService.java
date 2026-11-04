@@ -47,7 +47,7 @@ public final class DownloadService extends Service {
                 if (e.active() && e.wifiOnly() && !onWifi(DownloadService.this))
                     store.update(id, "failed", "Wi-Fi接続が切れたため停止しました。再接続後に再試行してください。", e.progress(), null, null);
                 e = store.find(id);
-                if (e != null && !e.active()) { YtDlpEngine.cancel(id); PitchEngine.cancel(id); }
+                if (e != null && !e.active()) { YtDlpEngine.cancel(id); PitchEngine.cancel(id); VocalEngine.cancel(id); }
             }
             handler.postDelayed(this, 500);
         }
@@ -70,7 +70,7 @@ public final class DownloadService extends Service {
         }
         store.recoverInterrupted();
         queue.submit(() -> { try { clean(new File(getFilesDir(), "staging")); } finally { recovered.countDown(); } });
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "音源の保存・キー変更", NotificationManager.IMPORTANCE_LOW);
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "音源の保存・キー変更・ボーカル抽出", NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
         handler.post(watch);
     }
@@ -81,13 +81,13 @@ public final class DownloadService extends Service {
             if (id != null) {
                 store.update(id, "cancelled", "中止しました", 0, null, null);
                 YtDlpEngine.cancel(id);
-                PitchEngine.cancel(id);
+                PitchEngine.cancel(id); VocalEngine.cancel(id);
             }
         }
         if (!store.active() && scheduled.isEmpty()) { stopSelf(startId); return START_NOT_STICKY; }
         startForeground(NOTIFICATION, notification("音源処理の準備中", 0, firstProcessing()), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         for (DownloadStore.Entry entry : store.queued()) {
-            if (scheduled.add(entry.id())) (entry.pitchJob() ? pitchQueue : queue).submit(() -> runDownload(entry));
+            if (scheduled.add(entry.id())) (entry.audioJob() ? pitchQueue : queue).submit(() -> runDownload(entry));
         }
         return START_NOT_STICKY;
     }
@@ -96,9 +96,9 @@ public final class DownloadService extends Service {
         processing.add(entry.id());
         try {
             recovered.await();
-            if (!store.update(entry.id(), "running", entry.pitchJob() ? "音声ファイルを準備しています…" : "音源を取得しています…", 0, null, null)) return;
+            if (!store.update(entry.id(), "running", entry.audioJob() ? "音声ファイルを準備しています…" : "音源を取得しています…", 0, null, null)) return;
             if (entry.wifiOnly() && !onWifi(this)) throw new IOException("Wi-Fiに接続してから再試行してください。");
-            if (!entry.pitchJob()) YtDlpEngine.init(this);
+            if (!entry.audioJob()) YtDlpEngine.init(this);
             requireActive(entry.id());
             long[] lastUpdate = {0};
             YtDlpEngine.Progress callback = (percent, line) -> {
@@ -106,11 +106,13 @@ public final class DownloadService extends Service {
                 if (now - lastUpdate[0] < 800) return;
                 lastUpdate[0] = now;
                 int p = Math.max(0, Math.min(99, (int) percent));
-                store.update(entry.id(), "running", entry.pitchJob() ? line : (p >= 99 ? "音声を抽出しています…" : "音源を取得しています…"), p, null, null);
+                store.update(entry.id(), "running", entry.audioJob() ? line : (p >= 99 ? "音声を抽出しています…" : "音源を取得しています…"), p, null, null);
                 if (android.os.Build.VERSION.SDK_INT < 33 || checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
                     getSystemService(NotificationManager.class).notify(NOTIFICATION, notification(entry.title(), p, entry.id()));
             };
-            File audio = entry.pitchJob() ? PitchEngine.render(this, entry, directory, () -> {
+            File audio = entry.vocalJob() ? VocalEngine.render(this, entry, directory, () -> {
+                DownloadStore.Entry current = store.find(entry.id()); return current != null && current.active();
+            }, (percent, message) -> callback.update(percent, message)) : entry.pitchJob() ? PitchEngine.render(this, entry, directory, () -> {
                 DownloadStore.Entry current = store.find(entry.id()); return current != null && current.active();
             }, (percent, message) -> callback.update(percent, message))
                     : YtDlpEngine.download(this, entry, directory, callback);
@@ -200,7 +202,7 @@ public final class DownloadService extends Service {
         for (DownloadStore.Entry entry : store.activeEntries()) {
             store.update(entry.id(), "failed", "Androidのバックグラウンド処理の時間上限に達しました。再試行してください。", 0, null, null);
             YtDlpEngine.cancel(entry.id());
-            PitchEngine.cancel(entry.id());
+            PitchEngine.cancel(entry.id()); VocalEngine.cancel(entry.id());
         }
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
@@ -210,7 +212,7 @@ public final class DownloadService extends Service {
         for (String id : scheduled) {
             store.update(id, "failed", "処理が終了しました。再試行してください。", 0, null, null);
             YtDlpEngine.cancel(id);
-            PitchEngine.cancel(id);
+            PitchEngine.cancel(id); VocalEngine.cancel(id);
         }
         queue.shutdownNow();
         pitchQueue.shutdownNow();

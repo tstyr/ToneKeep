@@ -33,13 +33,27 @@ public record PitchSettings(int semitones, boolean preserveFormants, String form
     }
     public List<String> previewArgs(File input, File intermediate, double start) {
         if (!Double.isFinite(start) || start < 0) throw new IllegalArgumentException("Invalid preview position");
-        List<String> args = base(); args.addAll(List.of("-v", "error", "-ss", number(start))); input(args, input);
-        args.addAll(List.of("-t", "20", "-map", "0:a:0", "-vn", "-af", filter(), "-c:a", "pcm_f32le", "-rf64", "auto", intermediate.getAbsolutePath()));
+        List<String> args = base(); args.addAll(List.of("-v", "info", "-ss", number(start))); input(args, input);
+        // Preview playback is 48 kHz stereo. Bound Rubber Band's work to that format,
+        // and measure the float output in this pass instead of decoding it a second time.
+        args.addAll(List.of("-t", "20", "-map", "0:a:0", "-vn", "-af",
+                "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo," + filter() + "," + peakFilter(),
+                "-c:a", "pcm_f32le", "-rf64", "auto", intermediate.getAbsolutePath()));
         return args;
+    }
+    private static String peakFilter() {
+        return "astats=metadata=0:reset=0:measure_perchannel=none:measure_overall=Peak_level";
     }
     public List<String> peakArgs(File intermediate) {
         List<String> args = base(); args.addAll(List.of("-v", "info")); input(args, intermediate);
-        args.addAll(List.of("-map", "0:a:0", "-af", "astats=metadata=0:reset=0:measure_perchannel=none:measure_overall=Peak_level", "-f", "null", "-"));
+        args.addAll(List.of("-map", "0:a:0", "-af", peakFilter(), "-f", "null", "-"));
+        return args;
+    }
+    public List<String> previewEncodeArgs(File intermediate, File output, double gain) {
+        if (!Double.isFinite(gain) || gain <= 0 || gain > 1) throw new IllegalArgumentException("Invalid output gain");
+        List<String> args = base(); args.addAll(List.of("-v", "error")); input(args, intermediate);
+        args.addAll(List.of("-map", "0:a:0", "-vn", "-af", "volume=" + number(gain),
+                "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", output.getAbsolutePath()));
         return args;
     }
     public List<String> exportArgs(File source, File intermediate, File output, double gain) {

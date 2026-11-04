@@ -47,6 +47,7 @@ public class PlaylistScreenTest {
             description(root, "キー変更").performClick();
             String export = "保存";
             assertFalse(find(root, export).isEnabled());
+            assertFalse(description(root, "選択した音源からボーカルを抽出").isEnabled());
             for (android.view.ViewParent parent = find(root, export).getParent(); parent != null; parent = parent.getParent())
                 assertFalse("Save must stay outside the scrollable controls", parent instanceof android.widget.ScrollView);
             find(root, "ファイル").performClick();
@@ -54,6 +55,7 @@ public class PlaylistScreenTest {
             assertEquals(Intent.ACTION_OPEN_DOCUMENT, pick.getAction()); assertEquals("audio/*", pick.getType());
             assertTrue((pick.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0);
             activity.onActivityResult(1067, Activity.RESULT_OK, new Intent().setData(Uri.parse("content://audio/owned-file")));
+            assertTrue(description(root, "選択した音源からボーカルを抽出").isEnabled());
             assertFalse(find(root, export).isEnabled());
             description(root, "半音上げる").performClick(); description(root, "半音上げる").performClick();
             assertTrue(find(root, export).isEnabled());
@@ -70,6 +72,33 @@ public class PlaylistScreenTest {
             assertEquals(0, widget(root, SeekBar.class).getProgress());
             for (int i = 0; i < 12; i++) description(root, "半音上げる").performClick();
             assertFalse(find(root, export).isEnabled());
+        }
+    }
+    @Test public void vocalQualityChoiceIsRememberedButCancellingDoesNotChangeIt() throws Exception {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get();
+            Method select = MainActivity.class.getDeclaredMethod("selectPitch", String.class, String.class); select.setAccessible(true);
+            select.invoke(activity, "content://audio/quality", "Quality test");
+            ViewGroup root = activity.findViewById(android.R.id.content);
+            description(root, "選択した音源からボーカルを抽出").performClick();
+            android.app.AlertDialog dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+            View choices = dialog.getWindow().getDecorView();
+            assertTrue(((android.widget.RadioButton) description(choices, "標準のボーカル抽出")).isChecked());
+            description(choices, "高精度のボーカル抽出").performClick();
+            assertTrue(((android.widget.RadioButton) description(choices, "高精度のボーカル抽出")).isChecked());
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
+            Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+            DownloadStore store = new DownloadStore(activity);
+            assertTrue(store.prefs.getBoolean("vocal_high_quality", false));
+            assertEquals("high", store.all().get(0).vocalQuality());
+            description(root, "選択した音源からボーカルを抽出").performClick();
+            dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+            choices = dialog.getWindow().getDecorView();
+            assertTrue(((android.widget.RadioButton) description(choices, "高精度のボーカル抽出")).isChecked());
+            description(choices, "標準のボーカル抽出").performClick();
+            dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick();
+            Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+            assertTrue(store.prefs.getBoolean("vocal_high_quality", false)); assertEquals(1, store.count());
         }
     }
     private <T extends View> T widget(View root, Class<T> type) {

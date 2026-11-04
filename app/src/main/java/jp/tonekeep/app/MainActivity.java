@@ -365,6 +365,9 @@ public final class MainActivity extends Activity {
         }), new LinearLayout.LayoutParams(0, -2, 1));
         pickers.addView(compactButton("ライブラリ", UiIcon.Kind.LIBRARY, v -> showLibrary()), new LinearLayout.LayoutParams(0, -2, 1));
         sourceCard.addView(pickers); add(body, sourceCard, 0, 8);
+        Button vocals = button("ボーカル抽出", false, v -> extractVocals(pitchSourceUri, pitchSourceName));
+        vocals.setContentDescription("選択した音源からボーカルを抽出"); vocals.setEnabled(!pitchSourceUri.isEmpty());
+        add(body, vocals, 0, 8);
         TextView key = text(keyLabel(), 42, MINT, true); key.setGravity(Gravity.CENTER);
         SeekBar slider = new SeekBar(this); slider.setMax(24); slider.setProgress(pitchSemitones + 12); slider.setMinHeight(dp(48));
         slider.setContentDescription("キー変更。マイナス12からプラス12半音");
@@ -425,6 +428,33 @@ public final class MainActivity extends Activity {
         for (DownloadStore.Entry entry : jobs) {
             add(results, entryCard(entry), 0, 10);
         }
+    }
+    private void extractVocals(String uri, String title) {
+        if (uri.isEmpty()) { toast("元の音声ファイルを選択してください。"); return; }
+        String model = VocalEngine.modelAvailable(this) ? "" : "初回は分離モデル（約64MB）をダウンロードします。通信量に注意してください。\n\n";
+        LinearLayout content = column(); content.setPadding(dp(20), dp(8), dp(20), dp(8));
+        add(content, text(model + "原本を残してFLAC（24bit・44.1kHz・ステレオ）で保存します。\n\n高精度はノイズや区間の継ぎ目を抑える処理を追加します。時間は標準の約4倍が目安です。曲によって効果が異なり、声の一部が失われる場合もあります。", 13, TEXT, false), 0, 12);
+        android.widget.RadioGroup modes = new android.widget.RadioGroup(this);
+        android.widget.RadioButton standard = new android.widget.RadioButton(this), high = new android.widget.RadioButton(this);
+        standard.setId(View.generateViewId()); high.setId(View.generateViewId());
+        standard.setText("標準"); high.setText("高精度（時間がかかります）");
+        standard.setContentDescription("標準のボーカル抽出"); high.setContentDescription("高精度のボーカル抽出");
+        standard.setTextColor(TEXT); high.setTextColor(TEXT);
+        modes.addView(standard); modes.addView(high);
+        modes.check(downloads.prefs.getBoolean("vocal_high_quality", false) ? high.getId() : standard.getId());
+        content.addView(modes);
+        ScrollView scroll = new ScrollView(this); scroll.addView(content);
+        new AlertDialog.Builder(this).setTitle("ボーカル抽出")
+                .setView(scroll)
+                .setPositiveButton("抽出して保存", (dialog, which) -> {
+                    try {
+                        VocalQuality quality = modes.getCheckedRadioButtonId() == high.getId() ? VocalQuality.HIGH : VocalQuality.STANDARD;
+                        DownloadStore.Entry entry = downloads.enqueueVocals(uri, title, quality);
+                        downloads.prefs.edit().putBoolean("vocal_high_quality", quality == VocalQuality.HIGH).apply();
+                        begin(entry); if (pitchMode) renderPitchJobs(true); else showLibrary();
+                    }
+                    catch (RuntimeException e) { toast(DownloadService.error(e)); }
+                }).setNegativeButton("キャンセル", null).show();
     }
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -534,9 +564,10 @@ public final class MainActivity extends Activity {
         PopupMenu menu = new PopupMenu(this, anchor);
         if (entry.status().equals("complete")) {
             menu.getMenu().add("キー変更").setOnMenuItemClickListener(item -> { selectPitch(entry.contentUri(), entry.title()); return true; });
-            menu.getMenu().add(entry.pitchJob() ? "同じ設定で保存" : "もう一度ダウンロード").setOnMenuItemClickListener(item -> { retry(entry); return true; });
+            menu.getMenu().add("ボーカル抽出").setOnMenuItemClickListener(item -> { extractVocals(entry.contentUri(), entry.title()); return true; });
+            menu.getMenu().add(entry.audioJob() ? "同じ設定で保存" : "もう一度ダウンロード").setOnMenuItemClickListener(item -> { retry(entry); return true; });
         }
-        if (!entry.pitchJob()) menu.getMenu().add("配信元を開く").setOnMenuItemClickListener(item -> { browse(entry.url()); return true; });
+        if (!entry.audioJob()) menu.getMenu().add("配信元を開く").setOnMenuItemClickListener(item -> { browse(entry.url()); return true; });
         menu.getMenu().add("詳細").setOnMenuItemClickListener(item -> { entryDetails(entry); return true; }); menu.show();
     }
     private void entryDetails(DownloadStore.Entry entry) {
@@ -547,7 +578,7 @@ public final class MainActivity extends Activity {
         LinearLayout card = card(), line = row(), names = column();
         String title = entry.pitchJob() ? entry.title().replaceFirst(" \\[キー [^\\]]+\\]$", "") : entry.title();
         add(names, clipped(title, 15, TEXT, true, 2), 0, 5);
-        String quality = entry.pitchJob() ? String.format(java.util.Locale.ROOT, "%+d · %s", entry.semitones(), new PitchSettings(entry.semitones(), entry.preserveFormants(), entry.outputFormat()).formatLabel())
+        String quality = entry.vocalJob() ? entry.quality() : entry.pitchJob() ? String.format(java.util.Locale.ROOT, "%+d · %s", entry.semitones(), new PitchSettings(entry.semitones(), entry.preserveFormants(), entry.outputFormat()).formatLabel())
                 : entry.formatId().isEmpty() ? "最高音質" : entry.quality();
         add(names, clipped(quality, 12, MUTED, false, 1), 0, 5);
         String state = switch (entry.status()) { case "complete" -> "保存済み"; case "queued" -> "待機中"; case "running", "publishing" -> "処理中 " + entry.progress() + "%"; case "cancelled" -> "中止"; default -> "失敗"; };

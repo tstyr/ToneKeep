@@ -132,12 +132,14 @@ public class NativePitchTest {
             awaitPlaying(player);
             instrumentation.runOnMainSync(() -> findDescription(activity.findViewById(android.R.id.content), "キー変更をプレビュー再生").performClick());
             awaitPlaying(player);
-            // Rapid setting changes cancel stale renders; seeking rebuilds the requested section.
+            // Rapid setting changes cancel stale renders; in-window seeks reuse the prepared audio.
             instrumentation.runOnMainSync(() -> {
                 for (int i = 0; i < 3; i++) findDescription(activity.findViewById(android.R.id.content), "半音上げる").performClick();
             });
             awaitPlaying(player);
             instrumentation.runOnMainSync(() -> player.seekTo(2000));
+            // MediaPlayer seeks asynchronously even when no render is needed.
+            awaitPosition(player, 2000);
             awaitPlaying(player);
             instrumentation.runOnMainSync(() -> assertTrue("Preview must start at selected source position", player.position() >= 2000));
             assertEquals("Preview must not create saved jobs", savedCount, store.count());
@@ -177,6 +179,17 @@ public class NativePitchTest {
             Thread.sleep(100);
         }
         fail("In-app audio did not reach playing state");
+    }
+    private void awaitPosition(AudioPlayer player, int position) throws Exception {
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        java.util.concurrent.atomic.AtomicInteger current = new java.util.concurrent.atomic.AtomicInteger();
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (System.currentTimeMillis() < deadline) {
+            instrumentation.runOnMainSync(() -> current.set(player.position()));
+            if (current.get() >= position) return;
+            Thread.sleep(50);
+        }
+        fail("In-app audio did not reach requested position");
     }
     private void capture(String name) throws Exception {
         var instrumentation = InstrumentationRegistry.getInstrumentation();

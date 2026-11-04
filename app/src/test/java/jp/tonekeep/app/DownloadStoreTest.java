@@ -35,6 +35,25 @@ public class DownloadStoreTest {
     }
     private MediaInfo.Track track(int index) { return new MediaInfo.Track("" + index, "Track " + index, "Artist", "https://example.com/song/" + index, "Test", 120, false, List.of()); }
 
+    @Test public void vocalJobsPersistAndRetryAsLocalSeparationWithoutDuplicateTitles() {
+        DownloadStore store = new DownloadStore(context);
+        store.prefs.edit().putBoolean("wifi", true).commit();
+        String uri = "content://audio/vocals-source";
+        DownloadStore.Entry entry = store.enqueueVocals(uri, "Song");
+        assertTrue(entry.vocalJob()); assertTrue(entry.audioJob()); assertFalse(entry.pitchJob());
+        assertFalse(entry.wifiOnly()); // Once the model is installed, separation is offline.
+        assertThrows(IllegalStateException.class, () -> store.enqueueVocals(uri, "Song"));
+        assertEquals(entry, new DownloadStore(context).find(entry.id()));
+        assertTrue(store.pitchRecent().stream().anyMatch(e -> e.id().equals(entry.id())));
+        assertTrue(store.batches().isEmpty());
+        store.update(entry.id(), "cancelled", "cancelled", 0, null, null);
+        assertFalse(store.update(entry.id(), "complete", "late", 100, "content://late", "bad.flac"));
+        DownloadStore.Entry retry = store.retry(entry);
+        assertTrue(retry.vocalJob()); assertEquals(uri, retry.url());
+        assertEquals("Song [ボーカル]", retry.title()); assertEquals("flac", retry.outputFormat());
+        assertThrows(IllegalArgumentException.class, () -> store.enqueueVocals("https://example.com/audio", "Remote"));
+    }
+
     @Test public void batchSkipsCompletedAndDuplicateTracksAndKeepsPlaylistOrder() {
         DownloadStore store = new DownloadStore(context);
         DownloadStore.Entry old = store.enqueue(track(1), "", "best");
@@ -42,6 +61,33 @@ public class DownloadStoreTest {
         DownloadStore.Added batch = store.enqueueBatch(List.of(track(1), track(2), track(2), track(3)), "Playlist");
         assertEquals(2, batch.added()); assertEquals(2, batch.skipped());
         assertEquals(List.of("Track 2", "Track 3"), store.queued().stream().map(DownloadStore.Entry::title).toList());
+    }
+    @Test public void vocalQualityIsPersistedPerJobAndRetryKeepsIt() {
+        DownloadStore store = new DownloadStore(context);
+        String uri = "content://audio/compare";
+        DownloadStore.Entry standard = store.enqueueVocals(uri, "Compare", VocalQuality.STANDARD);
+        DownloadStore.Entry high = store.enqueueVocals(uri, "Compare", VocalQuality.HIGH);
+        assertEquals("standard", store.find(standard.id()).vocalQuality());
+        assertEquals("high", new DownloadStore(context).find(high.id()).vocalQuality());
+        assertTrue(high.quality().contains("高精度"));
+        assertThrows(IllegalStateException.class, () -> store.enqueueVocals(uri, "Compare", VocalQuality.HIGH));
+        store.update(high.id(), "failed", "retry", 0, null, null);
+        store.prefs.edit().putBoolean("vocal_high_quality", false).commit();
+        assertEquals("high", store.retry(high).vocalQuality());
+        assertThrows(IllegalArgumentException.class, () -> VocalQuality.fromId("unknown"));
+    }
+    @Test public void versionTwoVocalJobsMigrateToStandardWithoutLosingSourceOrState() {
+        try (android.database.sqlite.SQLiteDatabase old = context.openOrCreateDatabase("downloads.db", Context.MODE_PRIVATE, null)) {
+            old.execSQL("CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,title TEXT NOT NULL,url TEXT NOT NULL,format_id TEXT NOT NULL,quality TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,progress INTEGER NOT NULL,content_uri TEXT NOT NULL,filename TEXT NOT NULL,wifi INTEGER NOT NULL,batch_id TEXT NOT NULL,batch_title TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'download',semitones INTEGER NOT NULL DEFAULT 0,preserve_formants INTEGER NOT NULL DEFAULT 1,output_format TEXT NOT NULL DEFAULT 'flac')");
+            old.execSQL("INSERT INTO jobs (id,title,url,format_id,quality,status,message,progress,content_uri,filename,wifi,batch_id,batch_title,kind) VALUES ('v2','Existing [ボーカル]','content://audio/old','','vocal','queued','waiting',0,'','',0,'batch','Existing','vocals')");
+            old.setVersion(2);
+        }
+        DownloadStore store = new DownloadStore(context);
+        DownloadStore.Entry old = store.find("v2");
+        assertEquals("standard", old.vocalQuality()); assertEquals("queued", old.status());
+        assertEquals("content://audio/old", old.url()); assertTrue(old.vocalJob());
+        assertThrows(IllegalStateException.class, () -> store.enqueueVocals(old.url(), "Existing"));
+        assertEquals("high", store.enqueueVocals(old.url(), "Existing", VocalQuality.HIGH).vocalQuality());
     }
     @Test public void cancellationCannotBeOverwrittenByLateProgressOrCompletion() {
         DownloadStore store = new DownloadStore(context);

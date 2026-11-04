@@ -15,10 +15,15 @@ public final class PitchFixtureRunner {
         File work = output.getParentFile();
         File intermediate = new File(work, "float-" + settings.semitones() + ".wav");
         File peak = new File(work, "peak-" + settings.semitones() + ".log");
-        execute(settings.shiftArgs(source, intermediate), new File(work, "shift.log"));
-        execute(settings.peakArgs(intermediate), peak);
+        boolean preview = args.length > 5;
+        if (preview) execute(settings.previewArgs(source, intermediate, Double.parseDouble(args[5])), peak);
+        else {
+            execute(settings.shiftArgs(source, intermediate), new File(work, "shift.log"));
+            execute(settings.peakArgs(intermediate), peak);
+        }
         double gain = PitchSettings.gainForPeak(Files.readString(peak.toPath(), StandardCharsets.UTF_8));
-        execute(settings.exportArgs(source, intermediate, output, gain), new File(work, "export.log"));
+        execute(preview ? settings.previewEncodeArgs(intermediate, output, gain)
+                : settings.exportArgs(source, intermediate, output, gain), new File(work, "export.log"));
         System.out.printf(Locale.ROOT, "{\"ratio\":%.10f,\"gain\":%.10f}%n", settings.ratio(), gain);
     }
     private static void execute(List<String> args, File log) throws Exception {

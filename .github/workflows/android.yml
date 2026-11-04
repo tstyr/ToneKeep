@@ -41,6 +41,12 @@ jobs:
         run: python3 scripts/smoke_ytdlp.py
       - name: Check pitch, tempo and output quality
         run: python3 scripts/smoke_pitch.py
+      - name: Check preview seeking, format and peak protection
+        run: python3 scripts/smoke_preview.py
+      - name: Check vocal separation with the pinned model
+        run: |
+          python3 scripts/smoke_vocals.py standard
+          python3 scripts/smoke_vocals.py high
       - name: Prepare download
         run: |
           mkdir -p dist

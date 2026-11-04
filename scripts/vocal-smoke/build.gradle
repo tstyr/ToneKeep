@@ -1,0 +1,15 @@
+plugins { id 'application' }
+repositories { mavenCentral() }
+dependencies {
+    implementation 'com.microsoft.onnxruntime:onnxruntime:1.20.0'
+    implementation 'com.github.wendykierp:JTransforms:3.1'
+}
+sourceSets.main.java {
+    srcDirs '../../app/src/main/java', 'src'
+    include '**/VocalSeparator.java', '**/VocalQuality.java', '**/VocalFixtureRunner.java'
+}
+application { mainClass = 'jp.tonekeep.app.VocalFixtureRunner' }
+tasks.named('run') {
+    maxHeapSize = '1024m'
+    args providers.gradleProperty('model').get(), providers.gradleProperty('input').get(), providers.gradleProperty('output').get(), providers.gradleProperty('quality').getOrElse('standard')
+}

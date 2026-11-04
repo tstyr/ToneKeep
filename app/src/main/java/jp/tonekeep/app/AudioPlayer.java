@@ -108,7 +108,14 @@ final class AudioPlayer implements AutoCloseable {
     boolean isPreparing() { return preparing; }
     void seekTo(int positionMs) {
         if (!ready) return;
-        if (preview) previewSeek.accept(positionMs);
+        if (preview) {
+            int local = positionMs - offset;
+            if (positionMs >= offset && local >= 0 && local < media.getDuration()) {
+                completed = false;
+                media.seekTo(local, MediaPlayer.SEEK_CLOSEST);
+                start();
+            } else previewSeek.accept(positionMs);
+        }
         else { completed = false; media.seekTo(Math.max(0, Math.min(total, positionMs)), MediaPlayer.SEEK_CLOSEST); }
     }
     int position() { return offset + (ready && media != null ? media.getCurrentPosition() : 0); }

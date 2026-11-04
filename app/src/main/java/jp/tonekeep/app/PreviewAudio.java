@@ -64,11 +64,10 @@ final class PreviewAudio implements AutoCloseable {
                 int start = Math.max(0, Math.min(startMs, Math.max(0, duration - 1000)));
                 File output = new File(root, "listen.wav");
                 if (settings != null) {
-                    File intermediate = new File(root, "float.wav"), peak = new File(root, "peak.log");
-                    PitchEngine.execute(context, "libffmpeg.so", settings.previewArgs(source, intermediate, start / 1000.0), taskId, new File(root, "preview.log"), active, null);
-                    PitchEngine.execute(context, "libffmpeg.so", settings.peakArgs(intermediate), taskId, peak, active, null);
+                    File intermediate = new File(root, "float.wav"), peak = new File(root, "preview.log");
+                    PitchEngine.execute(context, "libffmpeg.so", settings.previewArgs(source, intermediate, start / 1000.0), taskId, peak, active, null);
                     double gain = PitchSettings.gainForPeak(new String(Files.readAllBytes(peak.toPath()), java.nio.charset.StandardCharsets.UTF_8));
-                    PitchEngine.execute(context, "libffmpeg.so", List.of("-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", intermediate.getAbsolutePath(), "-vn", "-af", "volume=" + Double.toString(gain), "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", output.getAbsolutePath()), taskId, new File(root, "encode.log"), active, null);
+                    PitchEngine.execute(context, "libffmpeg.so", settings.previewEncodeArgs(intermediate, output, gain), taskId, new File(root, "encode.log"), active, null);
                 } else {
                     PitchEngine.execute(context, "libffmpeg.so", List.of("-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-i", source.getAbsolutePath(), "-map", "0:a:0", "-vn", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "-rf64", "auto", output.getAbsolutePath()), taskId, new File(root, "decode.log"), active, null);
                 }
